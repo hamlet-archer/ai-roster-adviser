@@ -1,0 +1,67 @@
+[Unit]
+Description=AI Roster Adviser — roster.{query,range}.v1 Unix-socket RPC server
+Documentation=https://github.com/hamlet-archer/ai-roster-adviser
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+# Type=simple rather than Type=notify: Node 20 LTS does not expose
+# AF_UNIX dgram sockets, so a stock-Node sd_notify(READY=1) is not
+# implementable without a native addon. Pragmatic mirror of
+# ai-calendar-adviser.service + ai-web-fetcher.service. Readiness is
+# confirmed by the ExecStartPost probe below.
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/ai-roster-adviser
+EnvironmentFile=/opt/ai-roster-adviser/.env
+ExecStart=/usr/bin/node dist/main.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+# Block until the RPC socket is actually bound — the unit isn't "active"
+# until callers can connect. Caps the boot race; if main.ts fatals during
+# runBootCheck (DwD scope drift, sheet-shape header-hash mismatch), this
+# fires before Restart kicks in and gives systemd a clean failed-state.
+ExecStartPost=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/ai-roster-adviser/query.sock ] && exit 0; sleep 1; done; exit 1'
+
+# RuntimeDirectory creates /run/ai-roster-adviser/ owned by ubuntu:ubuntu
+# at service start; systemd cleans it up on stop. main.ts binds its
+# socket inside this dir at /run/ai-roster-adviser/query.sock.
+RuntimeDirectory=ai-roster-adviser
+RuntimeDirectoryMode=0755
+
+# DwD service-account key handed in via LoadCredential. The runtime
+# path resolves via $CREDENTIALS_DIRECTORY/dwd-key. The actual env-var
+# wiring (ROSTER_DB_PATH, ROSTER_SOCKET_PATH, ROSTER_SHEET_ID,
+# DWD_IMPERSONATE_SUBJECT) is done in .env. DWD_KEY_PATH is set in .env
+# to $CREDENTIALS_DIRECTORY/dwd-key (resolved at start time).
+LoadCredential=dwd-key:/etc/ai-roster-adviser/dwd-key.json
+
+# Hardening (mirrors ai-calendar-adviser + ai-web-fetcher).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# /etc/roster-adviser holds the sheet-shape mapping yaml (sub-item 2);
+# the sync runner timer + the RPC daemon share it (the daemon reads it
+# during runBootCheck — no writes, but the path needs read access).
+ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# UDS-only for callers; outbound HTTPS to Google Sheets for the boot
+# self-check's values.get probe needs AF_INET + AF_INET6.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
