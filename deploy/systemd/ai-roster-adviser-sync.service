@@ -1,0 +1,38 @@
+[Unit]
+Description=AI Roster Adviser — sync W&L Log Google Sheet into local SQLite cache
+Documentation=https://github.com/hamlet-archer/ai-roster-adviser
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/ai-roster-adviser
+EnvironmentFile=/opt/ai-roster-adviser/.env
+ExecStart=/usr/bin/node /opt/ai-roster-adviser/dist/scripts/run-sync-once.js
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+
+# DwD service-account key — shared shape with calendar-adviser /
+# comms-adviser. The agent reads $DWD_KEY_PATH from EnvironmentFile.
+LoadCredential=dwd-key:/etc/ai-roster-adviser/dwd-key.json
+
+# Hardening (mirrors ai-calendar-adviser-sync.service).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

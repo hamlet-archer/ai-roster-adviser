@@ -1,0 +1,12 @@
+[Unit]
+Description=AI Roster Adviser — run sync every 15 minutes
+Documentation=https://github.com/hamlet-archer/ai-roster-adviser
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=60
+Persistent=true
+Unit=ai-roster-adviser-sync.service
+
+[Install]
+WantedBy=timers.target
