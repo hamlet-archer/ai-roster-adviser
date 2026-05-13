@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ops.hamlet-archer/contracts/roster.range.v1.json",
+  "title": "roster.range (v1) — RPC request",
+  "description": "Multi-day roster lookup for the roster-adviser Unix-socket RPC. Sibling to `roster.query.v1`; saves callers from issuing N single-day queries when scheduling across a week or fortnight.\n\nTransport: Unix socket at `/var/run/ai-roster-adviser/query.sock`. Caller authenticated via SO_PEERCRED.\n\nReturns one row per (person, date) pair within the requested window. Each row carries the same status enum and privacy guarantees as `roster.query.v1`. ai-doer rows always return `status: 'working'`, `source: 'hardcoded'`. Cache-stale rows (per-day staleness check) come back as `status: 'unknown'` with `staleness_seconds` filled, per AP-1.\n\nMaximum window span at v1: 30 days. Wider windows are rejected with `bad_query` to bound the receiver's response size and prevent client-side accidental fetches of the whole year.\n\nStatus: draft. Same activation gate as `roster.query.v1`.",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "trace_id",
+    "dedupe_key",
+    "source_ref",
+    "caller_agent_id",
+    "people",
+    "window"
+  ],
+  "properties": {
+    "contract_id": {
+      "type": "string",
+      "const": "roster.range.v1",
+      "description": "Contract identifier. Must be the literal string 'roster.range.v1'."
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 generated at the caller's entry point."
+    },
+    "dedupe_key": {
+      "type": "string",
+      "description": "SHA256 of '<caller_agent_id>:roster.range.v1:<people_canonical_csv>:<window_start>:<window_end>'."
+    },
+    "source_ref": {
+      "type": "string",
+      "description": "URL or ID of the caller context that triggered this query."
+    },
+    "caller_agent_id": {
+      "type": "string",
+      "description": "Self-asserted agent ID of the caller. Authorisation decisions key off SO_PEERCRED uid."
+    },
+    "people": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["kelvin", "sally", "chloe", "ai-doer"]
+      },
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "description": "Whose rosters to return. Order is not significant. ai-doer rows are synthesized as `status: 'working'` with `source: 'hardcoded'`. mkkk is intentionally NOT included at v1 — see roster.query.v1 description."
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Inclusive ISO date. Europe/London."
+        },
+        "end": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "Inclusive ISO date. Europe/London. Maximum span at v1: 30 days from start; wider windows return `bad_query`."
+        }
+      },
+      "description": "Inclusive date range. The receiver returns one row per (person, date) cross product."
+    }
+  },
+  "additionalProperties": false
+}

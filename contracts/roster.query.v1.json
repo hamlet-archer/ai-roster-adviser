@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-ops.hamlet-archer/contracts/roster.query.v1.json",
+  "title": "roster.query (v1) — RPC request",
+  "description": "Single-day roster lookup for the roster-adviser Unix-socket RPC. Filed 2026-05-10 with v0.45 §6.8 — third grounding-source contract feeding Phase 3's `## Constraints` section (calendar-adviser first, web-fetcher second).\n\nTransport: Unix socket at `/var/run/ai-roster-adviser/query.sock`. Caller authenticated via SO_PEERCRED.\n\nReturns the working status of one person on one date, sourced from the agent's local SQLite cache (synced from the W&L Log Google Sheet every 15min). Cache > 24h stale returns `status: 'unknown'` (AP-1 — no fabricated availability); chief-of-staff Phase 2 scheduler refuses to write `scheduled_start` for that person on that date when the answer is `unknown`.\n\nai-doer is hard-coded as 24/7 working in the agent (not in the sheet); `person: 'ai-doer'` always returns `status: 'working'` with `source: 'hardcoded'`.\n\nPublic holidays are handled via a separate (future) `holidays.<region>` feed — NOT in the W&L Log. v1 of this contract does not return public-holiday status; that becomes a field in v2 once the holidays feed lands. Annual-leave-on-public-holidays is similarly a separate per-staff pool field deferred to v2.\n\nPrivacy: `notes` on a leave/sick row (e.g. \"sick — migraine\") never leaves the agent; only the status enum is returned. Per the LLM-as-short-memory-expert pattern, the agent makes the privacy call deterministically.\n\nStatus: draft. Do not flip to active until roster-adviser implementation ships and its boot self-check passes once on `golden-ai-ops` (Sheets API auth + sheet-shape probe per AP-4 / AP-6).",
+  "type": "object",
+  "required": [
+    "contract_id",
+    "trace_id",
+    "dedupe_key",
+    "source_ref",
+    "caller_agent_id",
+    "person",
+    "date"
+  ],
+  "properties": {
+    "contract_id": {
+      "type": "string",
+      "const": "roster.query.v1",
+      "description": "Contract identifier. Must be the literal string 'roster.query.v1'."
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUIDv7 generated at the caller's entry point. Propagated to the receiver's audit row."
+    },
+    "dedupe_key": {
+      "type": "string",
+      "description": "SHA256 of '<caller_agent_id>:roster.query.v1:<person>:<date>'. Same caller asking the same question for the same day inside the cache TTL gets the cached answer."
+    },
+    "source_ref": {
+      "type": "string",
+      "description": "URL or ID of the caller context that triggered this query (e.g. an ops.db Runs row id, a task UUID, a Slack thread ts). Used in the audit row for traceability."
+    },
+    "caller_agent_id": {
+      "type": "string",
+      "description": "Self-asserted agent ID of the caller. Authorisation decisions key off SO_PEERCRED uid, not this value."
+    },
+    "person": {
+      "type": "string",
+      "enum": ["kelvin", "sally", "chloe", "ai-doer"],
+      "description": "Whose roster status to look up. ai-doer is hard-coded as `status: 'working'` with `source: 'hardcoded'` (no sheet entry). mkkk is intentionally NOT included at v1 — MK is excluded from staff-roster semantics by the same separation that excludes them from comms-adviser (per the project_mk_exclusion memory: comms-side denial, but task / roster-side they remain a separate identity not modeled here)."
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "ISO 8601 date (YYYY-MM-DD). Interpreted in Europe/London by default — the W&L Log is maintained in that zone. Past dates are answered from the cache; future dates beyond the sheet's filled horizon return `status: 'unknown'` with `staleness_seconds: null` (sheet-not-filled is distinct from cache-stale)."
+    }
+  },
+  "additionalProperties": false
+}

@@ -12,6 +12,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "better-sqlite3": "^11.5.0",
     "dotenv": "^16.4.5",
     "google-auth-library": "^9.14.0",
