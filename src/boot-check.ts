@@ -4,11 +4,13 @@
  * Runs before any RPC binding or sync work; fails loud with a ranked-cause
  * diagnostic when a dependency is wrong. Four steps:
  *
- *   1. DwD credential load — proves we can sign a JWT for `spreadsheets.readonly`
- *      against the configured impersonation subject.
+ *   1. OAuth credential load — proves the per-user refresh-token file is
+ *      present and parseable, scoped to `spreadsheets.readonly`, and bound
+ *      to a non-forbidden subject (i.e. NOT `kelvin@liao.info` per
+ *      `feedback_no_kelvin_account_impersonation`).
  *   2. `spreadsheets.values.get` round-trip on the W&L sheet header row — proves
  *      auth + scope + access. A 403 here is the most common failure (sheet not
- *      shared with the SA's impersonation target, or DwD scope not authorized).
+ *      shared with `ai@liao.info` as the OAuth subject).
  *   3. Sheet-shape mapping load OR first-boot probe-and-write. If the persisted
  *      mapping is missing, run the probe + save it. If present, validate.
  *   4. Header-hash compare — re-hash the LIVE header row and compare against
@@ -22,11 +24,11 @@
  * to check and in what order.
  */
 
-import type { GoogleSheetsAdapter } from './google-sheets-adapter.js';
+import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
 import {
-  GoogleSheetsAdapter as DefaultAdapter,
+  GoogleSheetsUserOauthAdapter as DefaultAdapter,
   WL_LOG_DEFAULT_SHEET_ID,
-} from './google-sheets-adapter.js';
+} from './google-sheets-user-oauth-adapter.js';
 import {
   hashHeaderRow,
   loadMappingFromFile,
@@ -38,7 +40,7 @@ import {
 import { probeSheetShape, SheetShapeProbeError } from './sheet-shape-probe.js';
 
 export type DependencyName =
-  | 'dwd-credential-load'
+  | 'oauth-credential-load'
   | 'sheets-values-get'
   | 'sheet-shape-mapping-load'
   | 'sheet-shape-probe'
@@ -62,15 +64,15 @@ export class BootCheckError extends Error {
   }
 }
 
-const RANKED_CAUSES_DWD_LOAD: readonly string[] = [
-  'DWD_KEY_PATH or DWD_IMPERSONATE_SUBJECT env var unset (systemd unit missing EnvironmentFile / LoadCredential, or local dev started without dotenv)',
-  'DwD key file path exists but content is invalid (truncated key, wrong format, or rotated since last deploy)',
-  'Impersonation subject is not a real Workspace user (typo in DWD_IMPERSONATE_SUBJECT)',
+const RANKED_CAUSES_OAUTH_LOAD: readonly string[] = [
+  'OAUTH_TOKEN_PATH points at a missing file (systemd unit LoadCredential not wired, or scripts/bootstrap-oauth.ts not yet run for ai@liao.info)',
+  'Token file exists but is invalid (hand-edited JSON, allowed_scopes missing spreadsheets.readonly, or refresh_token rotated since last consent)',
+  'OAUTH_SUBJECT set to a forbidden value (kelvin@liao.info is rejected by FORBIDDEN_SUBJECTS per feedback_no_kelvin_account_impersonation)',
 ];
 
 const RANKED_CAUSES_VALUES_GET: readonly string[] = [
-  'DwD scope not authorized (Admin Console > API controls > Domain-wide Delegation: client_id 101397011922329106102 missing scope https://www.googleapis.com/auth/spreadsheets.readonly)',
-  "Sheet not shared with the impersonation subject (open the W&L sheet → Share → confirm DWD_IMPERSONATE_SUBJECT has at least Viewer)",
+  'Refresh token expired or revoked (the per-user OAuth grant for ai@liao.info was rotated; re-run scripts/bootstrap-oauth.ts to mint a fresh refresh token)',
+  "Sheet not shared with ai@liao.info (open the W&L sheet → Share → confirm ai@liao.info has at least Viewer access)",
   'Sheet id wrong (env var ROSTER_SHEET_ID overrides the canonical default; check the value if set, or that the canonical sheet was not deleted/renamed)',
 ];
 
@@ -93,8 +95,8 @@ const RANKED_CAUSES_HEADER_HASH: readonly string[] = [
 ];
 
 export interface BootCheckDeps {
-  /** Test seam — production callers omit (adapter built from $DWD_KEY_PATH). */
-  readonly adapter?: GoogleSheetsAdapter;
+  /** Test seam — production callers omit (adapter built from $OAUTH_TOKEN_PATH). */
+  readonly adapter?: GoogleSheetsUserOauthAdapter;
   /** Test seam — production callers omit (defaults to process.env). */
   readonly env?: NodeJS.ProcessEnv;
   /**
@@ -109,7 +111,7 @@ export interface BootCheckDeps {
 }
 
 export interface BootCheckResult {
-  readonly adapter: GoogleSheetsAdapter;
+  readonly adapter: GoogleSheetsUserOauthAdapter;
   readonly mapping: SheetShapeMapping;
   readonly sheetId: string;
   readonly sheetRange: string;
@@ -127,18 +129,18 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
   // tab; the sync runner will widen to A1:ZZ over the whole tab.
   const sheetRange = env.ROSTER_SHEET_RANGE ?? 'A1:ZZ1';
 
-  // Step 1 — DwD credential load.
-  let adapter: GoogleSheetsAdapter;
+  // Step 1 — per-user OAuth credential load.
+  let adapter: GoogleSheetsUserOauthAdapter;
   try {
-    adapter = deps.adapter ?? DefaultAdapter.fromCredentialsFile({});
+    adapter = deps.adapter ?? DefaultAdapter.fromTokenFile({});
   } catch (err) {
     throw new BootCheckError({
       level: 'fatal',
       service: 'ai-roster-adviser',
       phase: 'boot-check',
-      step: 'dwd-credential-load',
+      step: 'oauth-credential-load',
       upstream_error: err instanceof Error ? err.message : String(err),
-      ranked_causes: RANKED_CAUSES_DWD_LOAD,
+      ranked_causes: RANKED_CAUSES_OAUTH_LOAD,
     });
   }
 

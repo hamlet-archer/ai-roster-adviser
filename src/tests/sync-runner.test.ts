@@ -5,10 +5,10 @@ import { join } from 'node:path';
 
 import { RosterCache } from '../cache.js';
 import {
-  GoogleSheetsAdapter,
+  GoogleSheetsUserOauthAdapter,
   type ValuesGetOptions,
   type ValuesGetResult,
-} from '../google-sheets-adapter.js';
+} from '../google-sheets-user-oauth-adapter.js';
 import {
   DEFAULT_STATUS_VALUE_MAP,
   hashHeaderRow,
@@ -25,8 +25,8 @@ import {
 
 function makeStubAdapter(
   handler: (opts: ValuesGetOptions) => ValuesGetResult | Promise<ValuesGetResult>,
-): GoogleSheetsAdapter {
-  return new GoogleSheetsAdapter({
+): GoogleSheetsUserOauthAdapter {
+  return new GoogleSheetsUserOauthAdapter({
     spreadsheets: {
       values: {
         get: async (params: { spreadsheetId: string; range: string }) => {
