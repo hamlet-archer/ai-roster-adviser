@@ -14,9 +14,10 @@ StandardOutput=journal
 StandardError=journal
 TimeoutStartSec=300
 
-# DwD service-account key — shared shape with calendar-adviser /
-# comms-adviser. The agent reads $DWD_KEY_PATH from EnvironmentFile.
-LoadCredential=dwd-key:/etc/ai-roster-adviser/dwd-key.json
+# Per-user OAuth refresh token (ai@liao.info, spreadsheets.readonly) —
+# same shape ai-calendar-adviser-sync.service uses post-G6.5c. The
+# agent reads $OAUTH_TOKEN_PATH from EnvironmentFile.
+LoadCredential=oauth-token:/etc/ai-roster-adviser/oauth-token.json
 
 # Hardening (mirrors ai-calendar-adviser-sync.service).
 NoNewPrivileges=yes

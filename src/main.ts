@@ -2,8 +2,8 @@
  * ai-roster-adviser entry point.
  *
  * Lifecycle (sub-item 4a — pre-deploy, code-side wiring):
- *   1. runBootCheck — DwD credential load + values.get probe + sheet-shape
- *      mapping load-or-probe + header-hash compare.
+ *   1. runBootCheck — per-user OAuth credential load + values.get probe +
+ *      sheet-shape mapping load-or-probe + header-hash compare.
  *   2. startRpcServer — long-running Unix-socket daemon at /run/ai-roster-adviser/query.sock.
  *
  * The 15-min sync cadence is driven by a separate systemd timer (sub-item 3 —

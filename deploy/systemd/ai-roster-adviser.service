@@ -27,8 +27,9 @@ TimeoutStopSec=10
 
 # Block until the RPC socket is actually bound — the unit isn't "active"
 # until callers can connect. Caps the boot race; if main.ts fatals during
-# runBootCheck (DwD scope drift, sheet-shape header-hash mismatch), this
-# fires before Restart kicks in and gives systemd a clean failed-state.
+# runBootCheck (OAuth token missing/invalid, sheet-shape header-hash
+# mismatch), this fires before Restart kicks in and gives systemd a
+# clean failed-state.
 ExecStartPost=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/ai-roster-adviser/query.sock ] && exit 0; sleep 1; done; exit 1'
 
 # RuntimeDirectory creates /run/ai-roster-adviser/ owned by ubuntu:ubuntu
@@ -37,12 +38,14 @@ ExecStartPost=/bin/bash -c 'for i in $(seq 1 30); do [ -S /run/ai-roster-adviser
 RuntimeDirectory=ai-roster-adviser
 RuntimeDirectoryMode=0755
 
-# DwD service-account key handed in via LoadCredential. The runtime
-# path resolves via $CREDENTIALS_DIRECTORY/dwd-key. The actual env-var
-# wiring (ROSTER_DB_PATH, ROSTER_SOCKET_PATH, ROSTER_SHEET_ID,
-# DWD_IMPERSONATE_SUBJECT) is done in .env. DWD_KEY_PATH is set in .env
-# to $CREDENTIALS_DIRECTORY/dwd-key (resolved at start time).
-LoadCredential=dwd-key:/etc/ai-roster-adviser/dwd-key.json
+# Per-user OAuth refresh token (ai@liao.info, spreadsheets.readonly)
+# handed in via LoadCredential. The runtime path resolves via
+# $CREDENTIALS_DIRECTORY/oauth-token. The actual env-var wiring
+# (ROSTER_DB_PATH, ROSTER_SOCKET_PATH, ROSTER_SHEET_ID) is done in .env.
+# OAUTH_TOKEN_PATH is set in .env to $CREDENTIALS_DIRECTORY/oauth-token
+# (resolved at start time). Token file shape + provisioning live in
+# src/scripts/bootstrap-oauth.ts (G6.15b).
+LoadCredential=oauth-token:/etc/ai-roster-adviser/oauth-token.json
 
 # Hardening (mirrors ai-calendar-adviser + ai-web-fetcher).
 NoNewPrivileges=true

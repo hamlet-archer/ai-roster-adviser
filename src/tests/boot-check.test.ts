@@ -6,10 +6,10 @@ import {
   runBootCheck,
 } from '../boot-check.js';
 import {
-  GoogleSheetsAdapter,
+  GoogleSheetsUserOauthAdapter,
   type ValuesGetOptions,
   type ValuesGetResult,
-} from '../google-sheets-adapter.js';
+} from '../google-sheets-user-oauth-adapter.js';
 import {
   hashHeaderRow,
   type SheetShapeMapping,
@@ -19,8 +19,8 @@ import {
 
 function makeStubAdapter(
   handler: (opts: ValuesGetOptions) => ValuesGetResult | Promise<ValuesGetResult>,
-): GoogleSheetsAdapter {
-  return new GoogleSheetsAdapter({
+): GoogleSheetsUserOauthAdapter {
+  return new GoogleSheetsUserOauthAdapter({
     spreadsheets: {
       values: {
         get: async (params: { spreadsheetId: string; range: string }) => {
@@ -111,7 +111,7 @@ describe('runBootCheck — first-boot path', () => {
       const d = (err as BootCheckError).diagnostic;
       expect(d.step).toBe('sheets-values-get');
       expect(d.ranked_causes.length).toBeGreaterThanOrEqual(3);
-      expect(d.ranked_causes[0]).toMatch(/DwD scope/);
+      expect(d.ranked_causes[0]).toMatch(/Refresh token expired or revoked/);
     }
   });
 });

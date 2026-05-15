@@ -29,7 +29,7 @@
 
 import type { RosterCache } from './cache.js';
 import type { RosterStatus } from './cache.js';
-import type { GoogleSheetsAdapter } from './google-sheets-adapter.js';
+import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
 import { hashHeaderRow, type SheetShapeMapping } from './sheet-shape-mapping.js';
 
 // PATCH-EXPIRY: 2026-08-13 owner=roster-adviser reason=https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (roster-adviser sub-item 3 magic-number register)
@@ -44,7 +44,7 @@ export const ROSTER_DEFAULT_HOURS_HALF_DAY = 4;
 export const ROSTER_SYNC_SOURCE = 'wl-log';
 
 export interface SyncCycleDeps {
-  readonly adapter: GoogleSheetsAdapter;
+  readonly adapter: GoogleSheetsUserOauthAdapter;
   readonly cache: RosterCache;
   readonly mapping: SheetShapeMapping;
   readonly sheetId: string;

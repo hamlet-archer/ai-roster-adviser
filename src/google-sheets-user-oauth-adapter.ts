@@ -6,8 +6,7 @@
  * never a human staff member's mailbox, and never Kelvin's. Per
  * `feedback_no_kelvin_account_impersonation` the module rejects
  * `subject=kelvin@liao.info` at load time. Per `feedback_no_dwd_anywhere`
- * this adapter replaces the DwD-via-JWT shape that authenticated as
- * `kelvin@liao.info` workspace-wide (deleted DwD client `101397011922329106102`,
+ * this adapter replaces the prior workspace-impersonation shape (deleted
  * 2026-05-14).
  *
  * Token-file shape, written by `scripts/bootstrap-oauth.ts` (G6.15b) to
@@ -36,7 +35,8 @@
  * Historical context (2026-05-13 security cut, G6.15a/b/c): this adapter
  * replaced a service-account-impersonation shape that authenticated as
  * `kelvin@liao.info` workspace-wide. See `feedback_no_dwd_anywhere` +
- * `feedback_no_kelvin_account_impersonation` for the rationale.
+ * `feedback_no_kelvin_account_impersonation` (memory files) for the
+ * rationale.
  */
 
 import { readFileSync } from 'node:fs';
