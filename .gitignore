@@ -7,3 +7,8 @@ dist/
 coverage/
 .vitest-cache/
 /var/
+
+# Per-user OAuth refresh token + secrets — must never be checked in.
+oauth-token/
+oauth-token.json
+.local/
