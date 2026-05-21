@@ -118,6 +118,10 @@ export class RosterCache {
   }
 
   upsertEntry(row: RosterEntryRow): void {
+    // Person is stored lowercase so the cache invariant matches the contract
+    // enum (`kelvin | sally | chloe | ai-doer`). Sheet display names are
+    // capitalized (`Sally`, `Chloe`) and would otherwise miss every contract
+    // lookup. Re-applied on read for symmetry.
     this.db
       .prepare(
         `INSERT INTO roster_entries
@@ -130,7 +134,7 @@ export class RosterCache {
            updated_at=excluded.updated_at`,
       )
       .run(
-        row.person,
+        row.person.toLowerCase(),
         row.dateIso,
         row.status,
         row.hours,
@@ -146,7 +150,7 @@ export class RosterCache {
                 updated_at AS updatedAt
          FROM roster_entries WHERE person = ? AND date_iso = ?`,
       )
-      .get(args.person, args.dateIso) as RosterEntryRow | undefined;
+      .get(args.person.toLowerCase(), args.dateIso) as RosterEntryRow | undefined;
     return row ?? null;
   }
 
@@ -155,6 +159,7 @@ export class RosterCache {
       return [];
     }
     const placeholders = query.people.map(() => '?').join(',');
+    const lowered = query.people.map((p) => p.toLowerCase());
     return this.db
       .prepare(
         `SELECT person, date_iso AS dateIso, status, hours, payload_json AS payloadJson,
@@ -165,7 +170,7 @@ export class RosterCache {
            AND date_iso <= ?
          ORDER BY person, date_iso`,
       )
-      .all(...query.people, query.startIso, query.endIso) as RosterEntryRow[];
+      .all(...lowered, query.startIso, query.endIso) as RosterEntryRow[];
   }
 
   getSyncState(source: string): SyncStateRow | null {

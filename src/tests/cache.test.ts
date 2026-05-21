@@ -75,6 +75,26 @@ describe('RosterCache', () => {
     ).toEqual([]);
   });
 
+  // Sheet display names are capitalized (`Sally`, `Chloe`) but the contract
+  // enum is lowercase (`sally`, `chloe`); the cache normalises on both
+  // write and read so a sync from the sheet is reachable by a contract
+  // query (and vice versa).
+  it('normalises person to lowercase on write and read', () => {
+    cache.upsertEntry(mkRow({ person: 'Sally', dateIso: '2026-05-13', status: 'working' }));
+    expect(cache.getEntry({ person: 'sally', dateIso: '2026-05-13' })?.status).toBe('working');
+    expect(cache.getEntry({ person: 'SALLY', dateIso: '2026-05-13' })?.status).toBe('working');
+    cache.upsertEntry(mkRow({ person: 'CHLOE', dateIso: '2026-05-14', status: 'leave' }));
+    expect(
+      cache
+        .entriesForRange({
+          people: ['Sally', 'Chloe'],
+          startIso: '2026-05-13',
+          endIso: '2026-05-14',
+        })
+        .map((r) => `${r.person}:${r.status}`),
+    ).toEqual(['chloe:leave', 'sally:working']);
+  });
+
   it('setSyncState upserts idempotently per source', () => {
     cache.setSyncState('w_and_l_log', 'sha256:abc', '2026-05-13T08:00:00Z');
     cache.setSyncState('w_and_l_log', 'sha256:def', '2026-05-13T08:15:00Z');
