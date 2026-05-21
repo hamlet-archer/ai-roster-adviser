@@ -1,30 +1,21 @@
 /**
- * Sync runner — pulls the W&L Log sheet, applies the persisted
- * sheet-shape mapping, applies the privacy filter, and upserts every
- * (person, date) cell into the SQLite cache.
+ * Sync runner — pulls the W&L Log sheet, applies the persisted vertical
+ * `SheetShapeMapping`, applies the per-staff resolution rules + privacy
+ * filter, and upserts every (person, date) row into the SQLite cache.
  *
- * G6.15.1 (2026-05-21) bumped `SheetShapeMapping` from horizontal (one row
- * per person, one column per date) to vertical (dates in column A, staff
- * groups in row 1, sub-headers in row 2). The probe + mapping shape now
- * carry the new layout; **the iteration logic in `runSyncCycle` has not
- * been rewritten yet** — that's G6.15.3.
- *
- * Until G6.15.3 lands, `runSyncCycle` returns `status: 'awaiting_v2_runner'`
- * with `cellsUpserted: 0`. The boot self-check + RPC server still work
- * (they read from the cache, which the sync runner is supposed to
- * populate), but the cache will be empty until G6.15.3 ships the new
- * iteration. This is deliberate per the G6.15 sub-item plan: keep
- * compilable, leave the iteration for the next sub-item, do not bridge.
- *
- * `resolveCell` (status enum resolution + `/sick/i` privacy collapse) is
- * shape-agnostic and stays — G6.15.3 will reuse it.
+ * G6.15.3 (2026-05-21) rewrote the iteration body to walk rows-by-date
+ * (column A) and resolve each staff's Day cell via `resolveStaffDayCell`
+ * (G6.15.2 priority rules). The horizontal-layout v0 iteration is gone.
  *
  * Privacy invariants (`project_roster_semantics` — load-bearing):
  *
  *   1. Cell text containing `/sick/i` collapses to `status: 'sick'`,
  *      hours `null`. Original cell text never reaches the cache.
+ *      Remarks cell text is fed to the resolver ONLY so the `/sick/i`
+ *      heuristic can fire — it is not persisted in any field.
  *   2. The `payload_json` column carries only structural metadata
- *      (`source_row`, `source_column`) — never free-text from the sheet.
+ *      (`source_row`, `staff_day_col`, `sick_collapsed`) — never
+ *      free-text from the sheet.
  *   3. There is no `notes` column anywhere in the cache; the privacy
  *      filter is the runtime guard.
  */
@@ -32,7 +23,8 @@
 import type { RosterCache } from './cache.js';
 import type { RosterStatus } from './cache.js';
 import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
-import type { SheetShapeMapping, StaffSubColumns } from './sheet-shape-mapping.js';
+import { hashHeaderRows, type SheetShapeMapping, type StaffSubColumns } from './sheet-shape-mapping.js';
+import { cellToIsoDate } from './sheet-shape-probe.js';
 
 // PATCH-EXPIRY: 2026-08-13 owner=roster-adviser reason=https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (roster-adviser sub-item 3 magic-number register)
 export const ROSTER_SYNC_LOOKBACK_DAYS = 30;
@@ -79,8 +71,7 @@ export interface SyncCycleReport {
   readonly status:
     | 'ok'
     | 'header_hash_mismatch'
-    | 'sheet_error'
-    | 'awaiting_v2_runner';
+    | 'sheet_error';
   readonly headerHashOk: boolean;
   readonly cellsUpserted: number;
   readonly cellsSkipped: number;
@@ -261,38 +252,197 @@ export function resolveStaffDayCell(
 }
 
 /**
- * **Transitional stub (G6.15.1 → G6.15.3).** The horizontal-layout
- * iteration that v0 of this function used is gone; the new vertical
- * iteration is the work item G6.15.3 carries. Until then, this returns a
- * report with status `awaiting_v2_runner` and no upserts. Callers
- * (`run-sync-once.ts`) treat non-`ok` as exit 1, so the systemd sync
- * timer will reliably surface "not yet implemented" instead of silently
- * doing nothing.
+ * Walk the sheet grid in vertical layout — for each data row whose
+ * column-A cell parses to a date, walk every staff in `mapping.staffColumns`
+ * and resolve the (staff, date) row's status via `resolveStaffDayCell`.
  *
- * `deps` is fully validated (so the function still type-checks against
- * its production caller) but never read — the stub is intentional, not a
- * skipped argument bug.
+ * AP-6 mid-cycle: re-hash (row 0, row 1) at the top of the sync; if the
+ * pair diverges from the persisted mapping's headerHash, abort with
+ * `header_hash_mismatch`. The boot self-check catches this on startup
+ * but a long-lived RPC daemon may sit between boots, so the re-check
+ * here catches in-flight edits without a full restart.
+ *
+ * AP-2 per cell: a parse error for one (person, date) row logs +
+ * continues; the loop never aborts on a single bad cell.
+ *
+ * Privacy invariants (`project_roster_semantics`):
+ *   1. Remarks cell text is fed to `resolveStaffDayCell` ONLY for the
+ *      `/sick/i` heuristic; the cell text itself never reaches the
+ *      cache (the resolver returns only the status enum + boolean
+ *      flag).
+ *   2. The `payload_json` column carries only structural metadata
+ *      (`source_row`, `staff_day_col`, `sick_collapsed`) — never
+ *      free-text from the sheet.
  */
 export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport> {
-  // Touch deps just enough to keep `noUnusedParameters` happy; this is
-  // not a leak of behaviour. G6.15.3 will rebuild the body from scratch.
-  void deps.adapter;
-  void deps.cache;
-  void deps.mapping;
-  void deps.sheetId;
-  void deps.sheetRange;
   const now = (deps.now ?? (() => new Date()))();
-  const iso = now.toISOString();
+  const startedAtIso = now.toISOString();
+
+  let values: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
+  try {
+    const res = await deps.adapter.valuesGet({
+      spreadsheetId: deps.sheetId,
+      range: deps.sheetRange,
+    });
+    values = res.values;
+  } catch (err) {
+    return {
+      startedAtIso,
+      endedAtIso: new Date().toISOString(),
+      status: 'sheet_error',
+      headerHashOk: false,
+      cellsUpserted: 0,
+      cellsSkipped: 0,
+      perCellOutcomes: [],
+      errorMessage: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (values.length < 2) {
+    return {
+      startedAtIso,
+      endedAtIso: new Date().toISOString(),
+      status: 'sheet_error',
+      headerHashOk: false,
+      cellsUpserted: 0,
+      cellsSkipped: 0,
+      perCellOutcomes: [],
+      errorMessage: `values.get returned ${values.length} rows; need at least 2 header rows`,
+    };
+  }
+
+  const liveHash = hashHeaderRows(values[0] ?? [], values[1] ?? []);
+  if (liveHash !== deps.mapping.headerHash) {
+    return {
+      startedAtIso,
+      endedAtIso: new Date().toISOString(),
+      status: 'header_hash_mismatch',
+      headerHashOk: false,
+      cellsUpserted: 0,
+      cellsSkipped: 0,
+      perCellOutcomes: [],
+      errorMessage: `live header hash ${liveHash.slice(0, 16)}… differs from persisted ${deps.mapping.headerHash.slice(0, 16)}… — delete the mapping file and re-probe after reviewing the diff`,
+    };
+  }
+
+  const perCellOutcomes: PerCellOutcome[] = [];
+  let cellsUpserted = 0;
+  let cellsSkipped = 0;
+
+  const staffEntries = Object.entries(deps.mapping.staffColumns);
+
+  // Walk data rows (skip the two header rows).
+  for (let r = 2; r < values.length; r += 1) {
+    const row = values[r] ?? [];
+    const dateCell = row[deps.mapping.dateColumn] ?? null;
+    const dateIso = cellToIsoDate(dateCell);
+    if (!dateIso) {
+      // Non-date rows (section headers, "Carried Forward", blank
+      // rows between months) are silently skipped — same as v0's
+      // "empty row" handling.
+      continue;
+    }
+    for (const [staffName, cols] of staffEntries) {
+      if (cols.day === undefined) {
+        // Staff has no Day sub-column → nothing to resolve. Skip silently.
+        continue;
+      }
+      const dayCell = row[cols.day] ?? null;
+      const annualLeaveCell =
+        cols.annualLeave !== undefined ? (row[cols.annualLeave] ?? null) : undefined;
+      const remarksCell =
+        cols.remarks !== undefined ? (row[cols.remarks] ?? null) : undefined;
+      // Empty Day cell with no AL override + no sick-in-remarks → skip
+      // (don't pollute the cache with `unknown` rows for empty cells;
+      // matches v0 behaviour). The privacy / AL paths inside
+      // resolveStaffDayCell still fire on remarks / AL alone if needed.
+      const isEmptyDayCell = dayCell === null || dayCell === undefined || dayCell === '';
+      const remarksText =
+        remarksCell === null || remarksCell === undefined ? '' : String(remarksCell);
+      const annualLeaveTriggers =
+        typeof annualLeaveCell === 'number' && annualLeaveCell > 0;
+      const sickInRemarks = /sick/i.test(remarksText);
+      if (isEmptyDayCell && !annualLeaveTriggers && !sickInRemarks) {
+        cellsSkipped += 1;
+        perCellOutcomes.push({
+          person: staffName,
+          dateIso,
+          status: 'skipped',
+          reason: 'empty_cell',
+        });
+        continue;
+      }
+      let resolution: CellResolution;
+      try {
+        resolution = resolveStaffDayCell(
+          { staffName, dayCell, annualLeaveCell, remarksCell },
+          deps.mapping,
+        );
+      } catch (err) {
+        cellsSkipped += 1;
+        perCellOutcomes.push({
+          person: staffName,
+          dateIso,
+          status: 'skipped',
+          reason: 'parse_error',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      if (resolution.unknownText) {
+        cellsSkipped += 1;
+        perCellOutcomes.push({
+          person: staffName,
+          dateIso,
+          status: 'skipped',
+          reason: 'unknown_text',
+          // Privacy: do NOT include cell text in `detail`. (staff, dateIso)
+          // is enough for the operator to find the row.
+        });
+        continue;
+      }
+      const payloadJson = JSON.stringify({
+        source_row: r,
+        staff_day_col: cols.day,
+        sick_collapsed: resolution.sickCollapsed,
+      });
+      try {
+        deps.cache.upsertEntry({
+          person: staffName,
+          dateIso,
+          status: resolution.status,
+          hours: resolution.hours,
+          payloadJson,
+          updatedAt: startedAtIso,
+        });
+        cellsUpserted += 1;
+        perCellOutcomes.push({
+          person: staffName,
+          dateIso,
+          status: 'upserted',
+        });
+      } catch (err) {
+        cellsSkipped += 1;
+        perCellOutcomes.push({
+          person: staffName,
+          dateIso,
+          status: 'skipped',
+          reason: 'parse_error',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  deps.cache.setSyncState(ROSTER_SYNC_SOURCE, deps.mapping.headerHash, startedAtIso);
+
   return {
-    startedAtIso: iso,
-    endedAtIso: iso,
-    status: 'awaiting_v2_runner',
-    headerHashOk: false,
-    cellsUpserted: 0,
-    cellsSkipped: 0,
-    perCellOutcomes: [],
-    errorMessage:
-      'sync runner v2 not yet implemented — G6.15.1 shipped the new sheet-shape mapping; G6.15.3 rewrites the iteration. See architect-backlog.md.',
+    startedAtIso,
+    endedAtIso: new Date().toISOString(),
+    status: 'ok',
+    headerHashOk: true,
+    cellsUpserted,
+    cellsSkipped,
+    perCellOutcomes,
   };
 }
 
