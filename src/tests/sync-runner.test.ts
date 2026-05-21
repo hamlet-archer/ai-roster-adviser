@@ -103,8 +103,9 @@ function wlMapping(): SheetShapeMapping {
         night: 4,
         remarks: 5,
         statusValueToEnumMap: {
-          work: 'working',
-          pet: 'leave-other',
+          full: 'working',
+          half: 'half-day',
+          off: 'not-working',
           '-': 'not-working',
           '': 'not-working',
         },
@@ -207,16 +208,21 @@ describe('hoursForStatus', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
-  it('Sally Work → working (per-staff map)', () => {
-    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Work' }, wlMapping());
+  it('Sally Full → working (per-staff map; 2026-05-21 rewrite — live W&L convention)', () => {
+    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Full' }, wlMapping());
     expect(r.status).toBe('working');
     expect(r.hours).toBe(ROSTER_DEFAULT_HOURS_WORKING);
     expect(r.unknownText).toBe(false);
   });
 
-  it('Sally Pet → leave-other', () => {
-    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Pet' }, wlMapping());
-    expect(r.status).toBe('leave-other');
+  it('Sally Half → half-day', () => {
+    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Half' }, wlMapping());
+    expect(r.status).toBe('half-day');
+  });
+
+  it('Sally Off → not-working', () => {
+    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Off' }, wlMapping());
+    expect(r.status).toBe('not-working');
   });
 
   it('Sally - → not-working', () => {
@@ -227,6 +233,11 @@ describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
   it('Sally empty → not-working (per-staff empty-string default)', () => {
     const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: '' }, wlMapping());
     expect(r.status).toBe('not-working');
+  });
+
+  it('Sally Leave → leave (falls through to global default; per-staff map does not redefine)', () => {
+    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Leave' }, wlMapping());
+    expect(r.status).toBe('leave');
   });
 
   it('Chloe Full → working', () => {
@@ -264,9 +275,9 @@ describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
     expect(r.status).toBe('working');
   });
 
-  it('Annual Leave numeric-string balance does NOT trigger leave — Day=Work + AL="3.2" → working', () => {
+  it('Annual Leave numeric-string balance does NOT trigger leave — Day=Full + AL="3.2" → working', () => {
     const r = resolveStaffDayCell(
-      { staffName: 'Sally', dayCell: 'Work', annualLeaveCell: '3.2' },
+      { staffName: 'Sally', dayCell: 'Full', annualLeaveCell: '3.2' },
       wlMapping(),
     );
     expect(r.status).toBe('working');
@@ -291,7 +302,7 @@ describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
 
   it('privacy filter on Remarks cell also triggers sick', () => {
     const r = resolveStaffDayCell(
-      { staffName: 'Sally', dayCell: 'Work', remarksCell: 'feeling sicker today' },
+      { staffName: 'Sally', dayCell: 'Full', remarksCell: 'feeling sicker today' },
       wlMapping(),
     );
     expect(r.status).toBe('sick');
@@ -344,8 +355,8 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     const mapping = wlMapping();
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
-        ['2025-11-11', 'Tue', '', 'Pet', '-', '', 'Half', 0, '-', 0, 0, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-11', 'Tue', '', 'Off', '-', '', 'Half', 0, '-', 0, 0, 0, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -361,7 +372,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     expect(report.cellsSkipped).toBe(0);
     expect(cache.getEntry({ person: 'Sally', dateIso: '2025-11-10' })?.status).toBe('working');
     expect(cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' })?.status).toBe('working');
-    expect(cache.getEntry({ person: 'Sally', dateIso: '2025-11-11' })?.status).toBe('leave-other');
+    expect(cache.getEntry({ person: 'Sally', dateIso: '2025-11-11' })?.status).toBe('not-working');
     expect(cache.getEntry({ person: 'Chloe', dateIso: '2025-11-11' })?.status).toBe('half-day');
   });
 
@@ -370,7 +381,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
         ['Carried Forward', '', '', '', '', '', '', '', '', '', '0.0', '5.0', ''],
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -391,7 +402,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       values: gridForWl([
         // Chloe Day says "Full" and Annual Leave = 5.1 (running balance); per
         // G6.15.5 the Day cell wins, and the AL value lands in payload only.
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 5.1, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 5.1, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -413,7 +424,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
         // Sally AL='-' (not a number); Chloe AL=0 (still a number).
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -436,7 +447,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     const mapping = wlMapping();
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
-        ['2025-11-10', 'Mon', '', 'Work', '-', 'sick - migraine', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', 'sick - migraine', 'Full', 1, '-', 0, 0.3, 0, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -466,7 +477,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       values: [
         tamperedRow1,
         WL_ROW2,
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
       ],
     }));
     const report = await runSyncCycle({
@@ -537,7 +548,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     const mapping = wlMapping();
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
       ]),
     }));
     expect(cache.getSyncState(ROSTER_SYNC_SOURCE)).toBeNull();
@@ -561,7 +572,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       values: [
         tamperedRow1,
         WL_ROW2,
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+        ['2025-11-10', 'Mon', '', 'Full', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
       ],
     }));
     await runSyncCycle({

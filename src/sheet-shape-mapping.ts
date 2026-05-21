@@ -186,31 +186,38 @@ export const DEFAULT_STATUS_VALUE_MAP: Readonly<Record<string, RosterStatus>> = 
  * at cell-resolution time. Keys are lowercased, trimmed; the resolver MUST
  * trim+lowercase the live cell text before lookup.
  *
- * Reference (per architect-backlog.md G6.15.2):
- *   - Sally writes `Work` / `Pet` / `-` in her Day column. `Pet` means
- *     pet-care leave-other (not formal Annual Leave); `-` means
- *     not-working that day.
- *   - Chloe writes `Full` / `Half` / `Off` and also fills numeric Day
- *     Value / Night Value cells. The numeric fallback for Chloe's Day
- *     column lives in the sync runner (`resolveStaffDayCell`), not here.
+ * Cell-convention evidence comes from a 2026-05-21 tally of the live W&L
+ * Log Day cells across the full sheet history (sheet ID
+ * `1nxa9K_B5iGj9EAfpSuSo48IHlQEIgW9MRDvMgdbzXqU`):
+ *
+ *   Sally  : Full=126, Off=50, Leave=16, Half=4, empty=802
+ *   Chloe  : Full=113, Half=40, Off=38, Leave=14, Travel=5, empty=788
+ *
+ * Sally and Chloe use the SAME convention — `Full` / `Half` / `Off` —
+ * for the Day cell; `Leave` falls through to the global default (which
+ * maps `leave → leave`). G6.15.2's original Sally seed (`Work` / `Pet` /
+ * `-`) was a misread of the planning-column `Need` block (whose Day cells
+ * carry `Work` / `Pet` / `Standby` / `Travel` / `-`); Sally's column never
+ * uses those tokens. Rewritten on 2026-05-21 (G6.15.5 follow-up).
+ *
+ * Chloe's numeric Day Value / Night Value fallback (when the Day cell is
+ * a number, > 0 means working) lives in the sync runner
+ * (`resolveStaffDayCell`), not here.
  *
  * Unknown staff names fall through to the global
  * `DEFAULT_STATUS_VALUE_MAP` only (no per-staff override).
  */
+const SHARED_STAFF_DEFAULTS: Readonly<Record<string, RosterStatus>> = Object.freeze({
+  full: 'working',
+  half: 'half-day',
+  off: 'not-working',
+  '-': 'not-working',
+  '': 'not-working',
+});
+
 export const STAFF_STATUS_DEFAULTS: Readonly<Record<string, Readonly<Record<string, RosterStatus>>>> = Object.freeze({
-  Sally: Object.freeze({
-    work: 'working',
-    pet: 'leave-other',
-    '-': 'not-working',
-    '': 'not-working',
-  }),
-  Chloe: Object.freeze({
-    full: 'working',
-    half: 'half-day',
-    off: 'not-working',
-    '-': 'not-working',
-    '': 'not-working',
-  }),
+  Sally: SHARED_STAFF_DEFAULTS,
+  Chloe: SHARED_STAFF_DEFAULTS,
 });
 
 /** Look up a staff's seed defaults; returns undefined for unknown staff. */
