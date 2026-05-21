@@ -90,21 +90,24 @@ describe('probeSheetShape — happy path', () => {
     });
     expect(mapping.version).toBe(SHEET_MAPPING_SCHEMA_VERSION);
     expect(mapping.dateColumn).toBe(0);
-    expect(mapping.staffColumns).toEqual({
-      Sally: { day: 3, night: 4, remarks: 5 },
-      Chloe: {
-        day: 6,
-        night: 7,
-        dayValue: 8,
-        nightValue: 9,
-        overtime: 10,
-        annualLeave: 11,
-        remarks: 12,
-      },
+    // G6.15.2: known staff (Sally / Chloe) carry seeded
+    // statusValueToEnumMap defaults; sub-column indices are unchanged.
+    expect(mapping.staffColumns.Sally).toMatchObject({ day: 3, night: 4, remarks: 5 });
+    expect(mapping.staffColumns.Chloe).toMatchObject({
+      day: 6,
+      night: 7,
+      dayValue: 8,
+      nightValue: 9,
+      overtime: 10,
+      annualLeave: 11,
+      remarks: 12,
     });
+    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.work).toBe('working');
+    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.pet).toBe('leave-other');
+    expect(mapping.staffColumns.Chloe?.statusValueToEnumMap?.full).toBe('working');
+    expect(mapping.staffColumns.Chloe?.statusValueToEnumMap?.half).toBe('half-day');
     expect(mapping.headerHash).toBe(hashHeaderRows(ROW1, ROW2));
     expect(mapping.probedAt).toBe('2026-05-21T19:11:05Z');
-    // The status enum map is seeded from DEFAULT_STATUS_VALUE_MAP.
     expect(mapping.statusValueToEnumMap.w).toBe('working');
   });
 
@@ -116,7 +119,7 @@ describe('probeSheetShape — happy path', () => {
         ['10/11/2025', 'Work'],
       ],
     });
-    expect(mapping.staffColumns.Sally).toEqual({ day: 1 });
+    expect(mapping.staffColumns.Sally).toMatchObject({ day: 1 });
   });
 
   it('default probedAt is a fresh ISO timestamp when omitted', () => {
@@ -229,8 +232,8 @@ describe('probeSheetShape — edge cases', () => {
       ],
     });
     expect(Object.keys(mapping.staffColumns)).toEqual(['Sally', 'Chloe']);
-    expect(mapping.staffColumns.Sally).toEqual({ day: 1 });
-    expect(mapping.staffColumns.Chloe).toEqual({ day: 2 });
+    expect(mapping.staffColumns.Sally).toMatchObject({ day: 1 });
+    expect(mapping.staffColumns.Chloe).toMatchObject({ day: 2 });
   });
 
   it('trims whitespace from staff names + sub-header text', () => {
@@ -242,7 +245,7 @@ describe('probeSheetShape — edge cases', () => {
       ],
     });
     expect(Object.keys(mapping.staffColumns)).toEqual(['Sally']);
-    expect(mapping.staffColumns.Sally).toEqual({ day: 1 });
+    expect(mapping.staffColumns.Sally).toMatchObject({ day: 1 });
   });
 
   it('silently skips empty row-2 cells inside a staff span (spacer columns OK)', () => {
@@ -253,9 +256,19 @@ describe('probeSheetShape — edge cases', () => {
         ['2025-11-10', 'Work', '', '-', '', 'IB access', '', '', 'Full'],
       ],
     });
-    expect(mapping.staffColumns).toEqual({
-      Sally: { day: 1, night: 3, remarks: 5 },
-      Chloe: { day: 8 },
+    expect(mapping.staffColumns.Sally).toMatchObject({ day: 1, night: 3, remarks: 5 });
+    expect(mapping.staffColumns.Chloe).toMatchObject({ day: 8 });
+  });
+
+  it('does NOT seed per-staff statusValueToEnumMap for unknown staff names', () => {
+    const mapping = probeSheetShape({
+      values: [
+        ['', 'NotSallyOrChloe'],
+        ['Date', 'Day'],
+        ['2025-11-10', 'Work'],
+      ],
     });
+    expect(mapping.staffColumns.NotSallyOrChloe).toEqual({ day: 1 });
+    expect(mapping.staffColumns.NotSallyOrChloe?.statusValueToEnumMap).toBeUndefined();
   });
 });

@@ -37,6 +37,7 @@
 
 import {
   DEFAULT_STATUS_VALUE_MAP,
+  defaultStatusMapForStaff,
   hashHeaderRows,
   KNOWN_SUB_COLUMN_NAMES,
   SHEET_MAPPING_SCHEMA_VERSION,
@@ -247,7 +248,15 @@ export function probeSheetShape(input: ProbeInput): SheetShapeMapping {
         'unexpected_subcolumn_count',
       );
     }
-    staffColumns[name] = cols as StaffSubColumns;
+    // Seed per-staff statusValueToEnumMap from STAFF_STATUS_DEFAULTS when
+    // the staff name is recognised (Sally / Chloe). Unknown staff fall
+    // through to the global SheetShapeMapping.statusValueToEnumMap at
+    // resolution time — no per-staff override is written here. G6.15.2.
+    const staffSeed = defaultStatusMapForStaff(name);
+    const staffSubCols: StaffSubColumns = staffSeed
+      ? ({ ...cols, statusValueToEnumMap: { ...staffSeed } } as StaffSubColumns)
+      : (cols as StaffSubColumns);
+    staffColumns[name] = staffSubCols;
   }
 
   return {
