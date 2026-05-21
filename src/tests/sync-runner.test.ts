@@ -3,8 +3,9 @@
  *
  * Covers:
  *   - `resolveCell` (legacy shape-agnostic resolver, kept for backwards-compat)
- *   - `resolveStaffDayCell` (G6.15.2 priority rules — privacy / AL > 0 /
- *     per-staff map / global fallback / Chloe numeric / unknown)
+ *   - `resolveStaffDayCell` (G6.15.5 priority rules — privacy /
+ *     per-staff map / global fallback / Chloe numeric / unknown;
+ *     AL balance no longer overrides status)
  *   - `runSyncCycle` (G6.15.3 grid iteration — happy path, header hash
  *     drift, sheet error, privacy never leaks, empty rows skipped,
  *     unknown_text path, sync_state write)
@@ -202,10 +203,10 @@ describe('hoursForStatus', () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolveStaffDayCell — G6.15.2 priority rules
+// resolveStaffDayCell — G6.15.5 priority rules (AL override removed)
 // ---------------------------------------------------------------------------
 
-describe('resolveStaffDayCell — G6.15.2 priority rules', () => {
+describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
   it('Sally Work → working (per-staff map)', () => {
     const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Work' }, wlMapping());
     expect(r.status).toBe('working');
@@ -253,39 +254,33 @@ describe('resolveStaffDayCell — G6.15.2 priority rules', () => {
     expect(r.status).toBe('not-working');
   });
 
-  it('Annual Leave > 0 overrides the Day cell to leave', () => {
+  // G6.15.5: Annual Leave is a running balance, not a per-day leave flag.
+  // The Day cell drives status; the AL number is metadata only.
+  it('Annual Leave > 0 does NOT override the Day cell — Day=Full + AL=5.1 → working', () => {
     const r = resolveStaffDayCell(
-      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: 1 },
-      wlMapping(),
-    );
-    expect(r.status).toBe('leave');
-  });
-
-  it('Annual Leave 0 does NOT trigger leave override', () => {
-    const r = resolveStaffDayCell(
-      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: 0 },
+      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: 5.1 },
       wlMapping(),
     );
     expect(r.status).toBe('working');
   });
 
-  it('Annual Leave numeric string > 0 triggers leave', () => {
+  it('Annual Leave numeric-string balance does NOT trigger leave — Day=Work + AL="3.2" → working', () => {
     const r = resolveStaffDayCell(
-      { staffName: 'Chloe', dayCell: 'Off', annualLeaveCell: '5.1' },
-      wlMapping(),
-    );
-    expect(r.status).toBe('leave');
-  });
-
-  it('Annual Leave "-" does NOT trigger leave', () => {
-    const r = resolveStaffDayCell(
-      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: '-' },
+      { staffName: 'Sally', dayCell: 'Work', annualLeaveCell: '3.2' },
       wlMapping(),
     );
     expect(r.status).toBe('working');
   });
 
-  it('privacy filter beats all other rules — /sick/i in Day cell', () => {
+  it('Day=Off + AL=2 still resolves via the per-staff map (Chloe Off → not-working)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Off', annualLeaveCell: 2 },
+      wlMapping(),
+    );
+    expect(r.status).toBe('not-working');
+  });
+
+  it('privacy filter beats per-staff map — /sick/i in Day cell with any AL', () => {
     const r = resolveStaffDayCell(
       { staffName: 'Chloe', dayCell: 'sick', annualLeaveCell: 1 },
       wlMapping(),
@@ -390,12 +385,13 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     expect(report.cellsUpserted).toBe(2);
   });
 
-  it('Annual Leave override is applied at sync time (not just in the resolver)', async () => {
+  it('AL balance does NOT override the Day cell at sync time — Day=Full + AL=5.1 → working', async () => {
     const mapping = wlMapping();
     const adapter = makeStubAdapter(() => ({
       values: gridForWl([
-        // Chloe Day says "Full" but Annual Leave = 1 → leave override.
-        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 1, ''],
+        // Chloe Day says "Full" and Annual Leave = 5.1 (running balance); per
+        // G6.15.5 the Day cell wins, and the AL value lands in payload only.
+        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 5.1, ''],
       ]),
     }));
     const report = await runSyncCycle({
@@ -406,7 +402,34 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       sheetRange: 'A1:ZZ',
     });
     expect(report.status).toBe('ok');
-    expect(cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' })?.status).toBe('leave');
+    const chloe = cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' });
+    expect(chloe?.status).toBe('working');
+    const payload = JSON.parse(chloe?.payloadJson ?? '{}') as { annual_leave_remaining?: number };
+    expect(payload.annual_leave_remaining).toBe(5.1);
+  });
+
+  it('AL balance is recorded in payload_json but absent when the cell is empty / "-"', async () => {
+    const mapping = wlMapping();
+    const adapter = makeStubAdapter(() => ({
+      values: gridForWl([
+        // Sally AL='-' (not a number); Chloe AL=0 (still a number).
+        ['2025-11-10', 'Mon', '', 'Work', '-', '', 'Full', 1, '-', 0, 0.3, 0, ''],
+      ]),
+    }));
+    const report = await runSyncCycle({
+      adapter,
+      cache,
+      mapping,
+      sheetId: 'test',
+      sheetRange: 'A1:ZZ',
+    });
+    expect(report.status).toBe('ok');
+    const sally = cache.getEntry({ person: 'Sally', dateIso: '2025-11-10' });
+    const sallyPayload = JSON.parse(sally?.payloadJson ?? '{}') as { annual_leave_remaining?: number };
+    expect(sallyPayload.annual_leave_remaining).toBeUndefined();
+    const chloe = cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' });
+    const chloePayload = JSON.parse(chloe?.payloadJson ?? '{}') as { annual_leave_remaining?: number };
+    expect(chloePayload.annual_leave_remaining).toBe(0);
   });
 
   it('privacy filter — /sick/i in Remarks → status=sick, no notes leak', async () => {
