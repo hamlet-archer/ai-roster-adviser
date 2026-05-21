@@ -1,24 +1,28 @@
 /**
  * Typed shape mapping for the W&L Log Google Sheet.
  *
- * Sub-item 2 (boot self-check) writes this file on first boot via the
- * sheet-shape probe (`sheet-shape-probe.ts`); subsequent boots load it
- * and compare the live header-row hash. Mismatch → fail loud (AP-6 —
- * schema drift requires human eyes; no auto-reprobe).
+ * The W&L sheet is laid out vertically: dates run down column A; row 1
+ * carries staff-name spanning labels (e.g. `Sally` over a group of columns,
+ * then `Chloe`); row 2 carries per-staff sub-headers from a known set
+ * (`Day` / `Night` / `Day Value` / `Night Value` / `Overtime` / `Annual Leave`
+ * / `Remarks`). Each staff "owns" the columns from their row-1 label up to
+ * (but not including) the next staff label.
  *
- * The persisted file lives at `/etc/roster-adviser/sheet-mapping.yaml`
- * by default (env override `ROSTER_SHEET_MAPPING_PATH`). Operators may
- * edit `status_value_to_enum_map` after the first probe to refine the
- * mapping; the probe seeds it with sensible defaults but cannot know the
- * sheet's actual cell-text conventions in advance.
+ * v2 (G6.15.1, 2026-05-21) replaces the previous horizontal layout
+ * (personColumn + dateColumns) — that probe shipped in v1 + failed in
+ * production on 2026-05-18 with `no_date_columns` against the real sheet,
+ * which is actually vertical. The schema version is bumped 1 → 2 so any
+ * persisted v1 mapping on the VPS gets re-probed cleanly on next boot.
  *
- * Privacy invariant (project_roster_semantics): this module is the
+ * The persisted file lives at `/etc/roster-adviser/sheet-mapping.yaml` by
+ * default (env override `ROSTER_SHEET_MAPPING_PATH`). Operators may edit
+ * `statusValueToEnumMap` after the first probe to refine the mapping;
+ * G6.15.2 will move that map per-staff.
+ *
+ * Privacy invariant (`project_roster_semantics`): this module is the
  * persisted shape; the cache layer (`cache.ts`) enforces no-`notes` at
- * the row schema; the sync runner (sub-item 3) will enforce no-`notes`
- * in cell→row translation. The mapping itself never carries `notes`.
- *
- * Schema versioning: `version: 1` is the current schema. Bumping the
- * version is a breaking change — operators must re-probe.
+ * the row schema; the sync runner (G6.15.3) will enforce no-`notes` in
+ * cell→row translation. The mapping itself never carries `notes`.
  */
 
 import { createHash } from 'node:crypto';
@@ -30,45 +34,106 @@ import yaml from 'js-yaml';
 import type { RosterStatus } from './cache.js';
 import { ROSTER_STATUS_VALUES } from './cache.js';
 
-export const SHEET_MAPPING_SCHEMA_VERSION = 1;
+export const SHEET_MAPPING_SCHEMA_VERSION = 2;
 
-export interface DateColumnEntry {
-  /** Zero-based column index in the sheet's value rows. */
-  readonly columnIndex: number;
-  /** Header text verbatim (used for human-readable diffs, not for matching). */
-  readonly headerText: string;
-  /** ISO date `YYYY-MM-DD` the column represents. */
-  readonly dateIso: string;
+/** Typed sub-column keys carried by `StaffSubColumns`. */
+export type SubColumnKey =
+  | 'day'
+  | 'night'
+  | 'dayValue'
+  | 'nightValue'
+  | 'overtime'
+  | 'annualLeave'
+  | 'remarks';
+
+/**
+ * Recognised sub-header strings (row 2) → typed sub-column key. Exact-match
+ * lookup; an unknown sub-header in a staff's span fails the probe loud per
+ * AP-6. Whitespace is trimmed before lookup.
+ */
+export const KNOWN_SUB_COLUMN_NAMES: Readonly<Record<string, SubColumnKey>> = Object.freeze({
+  Day: 'day',
+  Night: 'night',
+  'Day Value': 'dayValue',
+  'Night Value': 'nightValue',
+  Overtime: 'overtime',
+  'Annual Leave': 'annualLeave',
+  Remarks: 'remarks',
+});
+
+export const SUB_COLUMN_KEYS: readonly SubColumnKey[] = [
+  'day',
+  'night',
+  'dayValue',
+  'nightValue',
+  'overtime',
+  'annualLeave',
+  'remarks',
+];
+
+/**
+ * Zero-based column indices for one staff's sub-columns. Each field is
+ * optional — staff may not use every sub-column (Sally uses `Day` / `Night`
+ * / `Remarks`; Chloe uses the full numeric set). At least one field must
+ * be present; the probe rejects an all-empty staff span.
+ */
+export interface StaffSubColumns {
+  readonly day?: number;
+  readonly night?: number;
+  readonly dayValue?: number;
+  readonly nightValue?: number;
+  readonly overtime?: number;
+  readonly annualLeave?: number;
+  readonly remarks?: number;
 }
 
 export interface SheetShapeMapping {
   readonly version: number;
-  /** SHA256 hex of the canonicalised header row — see `hashHeaderRow`. */
+  /** SHA256 hex of the canonicalised header rows (row 1 + row 2). */
   readonly headerHash: string;
-  /** Zero-based column index containing person names. */
-  readonly personColumn: number;
-  /** Header text of the person column (for human-readable diffs). */
-  readonly personColumnHeader: string;
-  /** Date columns in left-to-right order, indexed into the value rows. */
-  readonly dateColumns: readonly DateColumnEntry[];
-  /** Cell-text-lowercased → status enum. Operators may extend. */
+  /** Zero-based column index containing dates. Canonically 0 (column A). */
+  readonly dateColumn: number;
+  /**
+   * Per-staff sub-column index map. Keyed by exact staff-name text from
+   * row 1 (trimmed). Order is staff-label-order in row 1.
+   */
+  readonly staffColumns: Readonly<Record<string, StaffSubColumns>>;
+  /**
+   * Cell-text-lowercased → status enum, applied uniformly across staff
+   * for now. G6.15.2 will replace this with a per-staff map under
+   * `staffColumns[name].statusValueToEnumMap`; this field stays as the
+   * fallback default.
+   */
   readonly statusValueToEnumMap: Readonly<Record<string, RosterStatus>>;
   /** ISO timestamp of the probe that wrote this mapping. */
   readonly probedAt: string;
 }
 
+const UNIT_SEPARATOR = '';
+
+function canonicaliseRow(row: ReadonlyArray<string | number | boolean | null | undefined>): string {
+  return row
+    .map((cell) =>
+      cell === null || cell === undefined ? '' : String(cell).trim().toLowerCase(),
+    )
+    .join(UNIT_SEPARATOR);
+}
+
 /**
- * SHA256 of the canonicalised header row.
+ * SHA256 of the canonicalised header rows (row 1 + row 2 joined).
  *
- * Canonicalisation: trim each cell, lowercase, join with `` (unit
- * separator). The lowercase + trim absorbs cosmetic edits (case,
- * trailing spaces) the operator may make in Sheets without triggering
- * an AP-6 fail-loud; the unit-separator join survives any literal cell
- * content. Empty cells (trailing) are preserved — sheet column count
- * changes IS a schema-drift signal.
+ * Canonicalisation: trim + lowercase each cell, join with `` (unit
+ * separator), then join row 1 + row 2 with `\n`. The lowercase + trim
+ * absorbs cosmetic edits (case, trailing spaces) the operator may make in
+ * Sheets without triggering an AP-6 fail-loud; the unit-separator join
+ * survives any literal cell content. Empty trailing cells are preserved
+ * — column count change IS a schema-drift signal.
  */
-export function hashHeaderRow(row: readonly string[]): string {
-  const canonical = row.map((cell) => cell.trim().toLowerCase()).join('');
+export function hashHeaderRows(
+  row1: ReadonlyArray<string | number | boolean | null | undefined>,
+  row2: ReadonlyArray<string | number | boolean | null | undefined>,
+): string {
+  const canonical = `${canonicaliseRow(row1)}\n${canonicaliseRow(row2)}`;
   return createHash('sha256').update(canonical).digest('hex');
 }
 
@@ -78,54 +143,67 @@ export function hashHeaderRow(row: readonly string[]): string {
  *
  * Privacy: any cell text that contains the substring `sick` (case-insensitive)
  * also collapses to `'sick'` at sync time — that's enforced in the sync
- * runner (sub-item 3), not here.
+ * runner (G6.15.3), not here.
  */
 export const DEFAULT_STATUS_VALUE_MAP: Readonly<Record<string, RosterStatus>> = Object.freeze({
   '': 'unknown',
-  'w': 'working',
-  'wk': 'working',
-  'working': 'working',
-  'on': 'working',
-  'yes': 'working',
-  'y': 'working',
+  w: 'working',
+  wk: 'working',
+  working: 'working',
+  on: 'working',
+  yes: 'working',
+  y: 'working',
   '✓': 'working',
-  'l': 'leave',
-  'lv': 'leave',
-  'leave': 'leave',
-  'al': 'leave',
-  'off': 'leave',
-  'h': 'half-day',
-  'half': 'half-day',
+  l: 'leave',
+  lv: 'leave',
+  leave: 'leave',
+  al: 'leave',
+  off: 'leave',
+  h: 'half-day',
+  half: 'half-day',
   'half-day': 'half-day',
   'half day': 'half-day',
   '½': 'half-day',
-  'ph': 'public-holiday',
+  ph: 'public-holiday',
   'public holiday': 'public-holiday',
   'public-holiday': 'public-holiday',
-  'sick': 'sick',
-  's': 'sick',
+  sick: 'sick',
+  s: 'sick',
 });
 
 /**
  * Render the mapping as a YAML string the operator can hand-edit on disk.
  *
- * Stable ordering: top-level keys appear in `version`, `headerHash`, …,
- * `statusValueToEnumMap` order. The enum-map keys are sorted for diff
- * stability across re-probes.
+ * Stable ordering: top-level keys appear in `version`, `headerHash`,
+ * `dateColumn`, `staffColumns`, `statusValueToEnumMap`, `probedAt` order.
+ * Within `staffColumns`, staff names are emitted in insertion order
+ * (matching row-1 left-to-right). Within each staff, sub-column keys are
+ * emitted in canonical `SUB_COLUMN_KEYS` order. The enum-map keys are
+ * sorted for diff stability across re-probes.
  */
 export function renderMappingYaml(mapping: SheetShapeMapping): string {
-  const sortedMap: Record<string, RosterStatus> = {};
+  const orderedStaffColumns: Record<string, Record<string, number>> = {};
+  for (const [name, cols] of Object.entries(mapping.staffColumns)) {
+    const ordered: Record<string, number> = {};
+    for (const key of SUB_COLUMN_KEYS) {
+      const v = cols[key];
+      if (typeof v === 'number') {
+        ordered[key] = v;
+      }
+    }
+    orderedStaffColumns[name] = ordered;
+  }
+  const sortedStatusMap: Record<string, RosterStatus> = {};
   for (const k of Object.keys(mapping.statusValueToEnumMap).sort()) {
-    sortedMap[k] = mapping.statusValueToEnumMap[k]!;
+    sortedStatusMap[k] = mapping.statusValueToEnumMap[k]!;
   }
   return yaml.dump(
     {
       version: mapping.version,
       headerHash: mapping.headerHash,
-      personColumn: mapping.personColumn,
-      personColumnHeader: mapping.personColumnHeader,
-      dateColumns: mapping.dateColumns,
-      statusValueToEnumMap: sortedMap,
+      dateColumn: mapping.dateColumn,
+      staffColumns: orderedStaffColumns,
+      statusValueToEnumMap: sortedStatusMap,
       probedAt: mapping.probedAt,
     },
     { lineWidth: 120, sortKeys: false },
@@ -140,7 +218,7 @@ export class SheetShapeMappingError extends Error {
       | 'version_mismatch'
       | 'missing_field'
       | 'invalid_status_enum'
-      | 'invalid_date_column',
+      | 'invalid_staff_columns',
   ) {
     super(message);
     this.name = 'SheetShapeMappingError';
@@ -171,14 +249,7 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
       'version_mismatch',
     );
   }
-  for (const k of [
-    'headerHash',
-    'personColumn',
-    'personColumnHeader',
-    'dateColumns',
-    'statusValueToEnumMap',
-    'probedAt',
-  ] as const) {
+  for (const k of ['headerHash', 'dateColumn', 'staffColumns', 'statusValueToEnumMap', 'probedAt'] as const) {
     if (!(k in r)) {
       throw new SheetShapeMappingError(`mapping missing field: ${k}`, 'missing_field');
     }
@@ -186,38 +257,49 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
   if (typeof r.headerHash !== 'string' || !/^[0-9a-f]{64}$/.test(r.headerHash)) {
     throw new SheetShapeMappingError('headerHash must be SHA256 hex', 'missing_field');
   }
-  if (typeof r.personColumn !== 'number' || r.personColumn < 0) {
-    throw new SheetShapeMappingError('personColumn must be a non-negative integer', 'missing_field');
+  if (typeof r.dateColumn !== 'number' || r.dateColumn < 0 || !Number.isInteger(r.dateColumn)) {
+    throw new SheetShapeMappingError('dateColumn must be a non-negative integer', 'missing_field');
   }
-  if (typeof r.personColumnHeader !== 'string') {
-    throw new SheetShapeMappingError('personColumnHeader must be a string', 'missing_field');
+  if (!r.staffColumns || typeof r.staffColumns !== 'object' || Array.isArray(r.staffColumns)) {
+    throw new SheetShapeMappingError('staffColumns must be a mapping', 'invalid_staff_columns');
   }
-  if (!Array.isArray(r.dateColumns)) {
-    throw new SheetShapeMappingError('dateColumns must be a list', 'missing_field');
-  }
-  const dateColumns: DateColumnEntry[] = [];
-  for (const dc of r.dateColumns) {
-    if (!dc || typeof dc !== 'object') {
-      throw new SheetShapeMappingError('dateColumns entry must be a mapping', 'invalid_date_column');
-    }
-    const e = dc as Record<string, unknown>;
-    if (typeof e.columnIndex !== 'number' || typeof e.headerText !== 'string') {
+  const staffColumns: Record<string, StaffSubColumns> = {};
+  for (const [name, rawCols] of Object.entries(r.staffColumns as Record<string, unknown>)) {
+    if (!rawCols || typeof rawCols !== 'object' || Array.isArray(rawCols)) {
       throw new SheetShapeMappingError(
-        'dateColumns entry missing columnIndex/headerText',
-        'invalid_date_column',
+        `staffColumns["${name}"] must be a mapping`,
+        'invalid_staff_columns',
       );
     }
-    if (typeof e.dateIso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(e.dateIso)) {
+    const cols: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rawCols as Record<string, unknown>)) {
+      if (!(SUB_COLUMN_KEYS as readonly string[]).includes(k)) {
+        throw new SheetShapeMappingError(
+          `staffColumns["${name}"] has unknown sub-column key: ${k}`,
+          'invalid_staff_columns',
+        );
+      }
+      if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+        throw new SheetShapeMappingError(
+          `staffColumns["${name}"].${k} must be a non-negative integer`,
+          'invalid_staff_columns',
+        );
+      }
+      cols[k] = v;
+    }
+    if (Object.keys(cols).length === 0) {
       throw new SheetShapeMappingError(
-        `dateColumns entry has invalid dateIso: ${String(e.dateIso)}`,
-        'invalid_date_column',
+        `staffColumns["${name}"] must have at least one sub-column`,
+        'invalid_staff_columns',
       );
     }
-    dateColumns.push({
-      columnIndex: e.columnIndex,
-      headerText: e.headerText,
-      dateIso: e.dateIso,
-    });
+    staffColumns[name] = cols as StaffSubColumns;
+  }
+  if (Object.keys(staffColumns).length === 0) {
+    throw new SheetShapeMappingError(
+      'staffColumns must contain at least one staff entry',
+      'invalid_staff_columns',
+    );
   }
   if (!r.statusValueToEnumMap || typeof r.statusValueToEnumMap !== 'object') {
     throw new SheetShapeMappingError('statusValueToEnumMap must be a mapping', 'missing_field');
@@ -239,9 +321,8 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
   return {
     version: SHEET_MAPPING_SCHEMA_VERSION,
     headerHash: r.headerHash,
-    personColumn: r.personColumn,
-    personColumnHeader: r.personColumnHeader,
-    dateColumns,
+    dateColumn: r.dateColumn,
+    staffColumns,
     statusValueToEnumMap: enumMap,
     probedAt: r.probedAt,
   };

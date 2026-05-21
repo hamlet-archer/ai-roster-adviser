@@ -8,13 +8,16 @@
  *      present and parseable, scoped to `spreadsheets.readonly`, and bound
  *      to a non-forbidden subject (i.e. NOT `kelvin@liao.info` per
  *      `feedback_no_kelvin_account_impersonation`).
- *   2. `spreadsheets.values.get` round-trip on the W&L sheet header row — proves
- *      auth + scope + access. A 403 here is the most common failure (sheet not
- *      shared with `ai@liao.info` as the OAuth subject).
+ *   2. `spreadsheets.values.get` round-trip on the W&L sheet — proves auth +
+ *      scope + access. A 403 here is the most common failure (sheet not
+ *      shared with `ai@liao.info` as the OAuth subject). The probe range
+ *      covers enough rows to detect dates in column A.
  *   3. Sheet-shape mapping load OR first-boot probe-and-write. If the persisted
- *      mapping is missing, run the probe + save it. If present, validate.
- *   4. Header-hash compare — re-hash the LIVE header row and compare against
- *      the persisted hash. Mismatch → AP-6 fail-loud, no auto-reprobe.
+ *      mapping is missing, run the probe (vertical layout — see
+ *      `sheet-shape-probe.ts`) + save it. If present, validate.
+ *   4. Header-hash compare — re-hash the LIVE header rows (row 1 + row 2)
+ *      and compare against the persisted hash. Mismatch → AP-6 fail-loud,
+ *      no auto-reprobe.
  *
  * Why ranked causes (AP-4): a single best-guess diagnostic encourages whoever
  * is paged to act on the guess instead of verifying. The patchwork-audit AP-4
@@ -30,7 +33,7 @@ import {
   WL_LOG_DEFAULT_SHEET_ID,
 } from './google-sheets-user-oauth-adapter.js';
 import {
-  hashHeaderRow,
+  hashHeaderRows,
   loadMappingFromFile,
   resolveMappingPath,
   saveMappingToFile,
@@ -77,19 +80,19 @@ const RANKED_CAUSES_VALUES_GET: readonly string[] = [
 ];
 
 const RANKED_CAUSES_PROBE: readonly string[] = [
-  'Header row has no parseable date columns (operator changed the header to free-text — restore ISO/UK-style/numeric dates)',
-  'Probe is reading the wrong sheet tab (set ROSTER_SHEET_RANGE to the correct A1 range, e.g. "Roster!A1:ZZ1")',
-  'Sheet is empty (the values.get call returned no rows — share the sheet AND make sure the header row is row 1)',
+  'Column A has no parseable dates in the sampled data rows (operator changed the date column or moved the sheet header; restore ISO / UK-style / numeric dates in column A starting at row 3)',
+  'Row 1 has no staff spanning labels (Sally/Chloe must appear as staff-name cells over each group of sub-columns)',
+  'A sub-header in row 2 is not one of the 7 known names (Day / Night / Day Value / Night Value / Overtime / Annual Leave / Remarks); rename the cell or extend the known set',
 ];
 
 const RANKED_CAUSES_MAPPING_LOAD: readonly string[] = [
   'Mapping file at ROSTER_SHEET_MAPPING_PATH is corrupt (operator hand-edited it into invalid YAML — restore from version control or delete and re-probe)',
-  'Mapping schema version drift (the file was written by an older agent version; bump roster-adviser AND re-probe)',
-  'Mapping references an unknown status enum value (operator added a status not in the typed enum — fix the value or extend the enum)',
+  'Mapping schema version drift (the file was written by an older agent version; bump roster-adviser AND re-probe by deleting the persisted mapping)',
+  'Mapping references an unknown status enum value or sub-column key (operator added a value not in the typed set — fix the value or extend the enum)',
 ];
 
 const RANKED_CAUSES_HEADER_HASH: readonly string[] = [
-  'Sheet header row was edited since the last probe (a date column was added/removed/renamed, or the person column header changed) — review the diff and re-probe by deleting the persisted mapping file',
+  'Sheet header rows (row 1 = staff names; row 2 = sub-headers) were edited since the last probe (a staff added/removed/renamed, or a sub-header changed) — review the diff and re-probe by deleting the persisted mapping file',
   'Sheet structural change (a new section, blank row inserted, or column reorder) — review and re-probe',
   'Wrong sheet tab (ROSTER_SHEET_RANGE env var pointing at a different tab than when the mapping was first probed)',
 ];
@@ -125,9 +128,12 @@ export interface BootCheckResult {
 export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckResult> {
   const env = deps.env ?? process.env;
   const sheetId = env.ROSTER_SHEET_ID ?? WL_LOG_DEFAULT_SHEET_ID;
-  // Default range covers the first ~500 columns of the header row's sheet
-  // tab; the sync runner will widen to A1:ZZ over the whole tab.
-  const sheetRange = env.ROSTER_SHEET_RANGE ?? 'A1:ZZ1';
+  // Default range covers enough rows for the vertical probe to see staff
+  // labels (row 1), sub-headers (row 2), and a slab of data rows (rows
+  // 3+) to verify column A carries dates. 200 rows ≈ 6-7 months of daily
+  // entries — generous but cheap. The sync runner uses a wider range
+  // (`A1:ZZ`) to pull the whole sheet.
+  const sheetRange = env.ROSTER_SHEET_RANGE ?? 'A1:ZZ200';
 
   // Step 1 — per-user OAuth credential load.
   let adapter: GoogleSheetsUserOauthAdapter;
@@ -144,11 +150,11 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
     });
   }
 
-  // Step 2 — `spreadsheets.values.get` round-trip on the header row.
-  let headerRow: ReadonlyArray<string | number | boolean | null>;
+  // Step 2 — `spreadsheets.values.get` round-trip covering header rows + data sample.
+  let values: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   try {
     const res = await adapter.valuesGet({ spreadsheetId: sheetId, range: sheetRange });
-    headerRow = (res.values[0] ?? []) as ReadonlyArray<string | number | boolean | null>;
+    values = res.values as ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   } catch (err) {
     throw new BootCheckError({
       level: 'fatal',
@@ -160,13 +166,13 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
       ranked_causes: RANKED_CAUSES_VALUES_GET,
     });
   }
-  if (headerRow.length === 0) {
+  if (values.length === 0) {
     throw new BootCheckError({
       level: 'fatal',
       service: 'ai-roster-adviser',
       phase: 'boot-check',
       step: 'sheets-values-get',
-      upstream_error: 'values.get returned no header row',
+      upstream_error: 'values.get returned no rows',
       detail: { sheet_id: sheetId, sheet_range: sheetRange },
       ranked_causes: RANKED_CAUSES_VALUES_GET,
     });
@@ -197,7 +203,7 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
   if (mapping === null) {
     // First boot — probe + persist.
     try {
-      mapping = probeSheetShape({ headerRow });
+      mapping = probeSheetShape({ values });
       save(mapping);
     } catch (err) {
       throw new BootCheckError({
@@ -216,9 +222,8 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
     return { adapter, mapping, sheetId, sheetRange };
   }
 
-  // Step 4 — header-hash compare. AP-6: no auto-reprobe on mismatch.
-  const headerStrings = headerRow.map((c) => (c === null || c === undefined ? '' : String(c)));
-  const liveHash = hashHeaderRow(headerStrings);
+  // Step 4 — header-rows hash compare. AP-6: no auto-reprobe on mismatch.
+  const liveHash = hashHeaderRows(values[0] ?? [], values[1] ?? []);
   if (liveHash !== mapping.headerHash) {
     throw new BootCheckError({
       level: 'fatal',
