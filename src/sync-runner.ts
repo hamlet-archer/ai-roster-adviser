@@ -3,34 +3,36 @@
  * sheet-shape mapping, applies the privacy filter, and upserts every
  * (person, date) cell into the SQLite cache.
  *
- * Driven by the 15-min systemd timer (`deploy/systemd/ai-roster-adviser-sync.timer`).
+ * G6.15.1 (2026-05-21) bumped `SheetShapeMapping` from horizontal (one row
+ * per person, one column per date) to vertical (dates in column A, staff
+ * groups in row 1, sub-headers in row 2). The probe + mapping shape now
+ * carry the new layout; **the iteration logic in `runSyncCycle` has not
+ * been rewritten yet** — that's G6.15.3.
  *
- * Privacy invariant (project_roster_semantics — load-bearing here):
+ * Until G6.15.3 lands, `runSyncCycle` returns `status: 'awaiting_v2_runner'`
+ * with `cellsUpserted: 0`. The boot self-check + RPC server still work
+ * (they read from the cache, which the sync runner is supposed to
+ * populate), but the cache will be empty until G6.15.3 ships the new
+ * iteration. This is deliberate per the G6.15 sub-item plan: keep
+ * compilable, leave the iteration for the next sub-item, do not bridge.
+ *
+ * `resolveCell` (status enum resolution + `/sick/i` privacy collapse) is
+ * shape-agnostic and stays — G6.15.3 will reuse it.
+ *
+ * Privacy invariants (`project_roster_semantics` — load-bearing):
  *
  *   1. Cell text containing `/sick/i` collapses to `status: 'sick'`,
- *      hours `null`. The original cell text (e.g. "sick - migraine")
- *      never reaches the cache.
+ *      hours `null`. Original cell text never reaches the cache.
  *   2. The `payload_json` column carries only structural metadata
  *      (`source_row`, `source_column`) — never free-text from the sheet.
- *   3. There is no `notes` column anywhere in the cache (sub-item 1's
- *      schema guard); the privacy filter is the runtime guard.
- *
- * AP-2 discipline: a parse error for one (person, date) cell logs +
- * skips that cell; the loop continues. A header-hash mismatch at the
- * top of the sync is fatal — that's an AP-6 schema-drift signal the
- * boot self-check already catches; we re-verify here in case the sheet
- * was edited between boot and the next 15-min tick.
- *
- * Pacing: the W&L sheet is small (~12 people × ~365 days). One
- * `values.get` call returns the entire grid; no pacing is needed inside
- * a single cycle. The 15-min cadence already paces us under Google's
- * per-user-per-minute quota.
+ *   3. There is no `notes` column anywhere in the cache; the privacy
+ *      filter is the runtime guard.
  */
 
 import type { RosterCache } from './cache.js';
 import type { RosterStatus } from './cache.js';
 import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
-import { hashHeaderRow, type SheetShapeMapping } from './sheet-shape-mapping.js';
+import type { SheetShapeMapping } from './sheet-shape-mapping.js';
 
 // PATCH-EXPIRY: 2026-08-13 owner=roster-adviser reason=https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (roster-adviser sub-item 3 magic-number register)
 export const ROSTER_SYNC_LOOKBACK_DAYS = 30;
@@ -74,7 +76,11 @@ export interface PerCellOutcome {
 export interface SyncCycleReport {
   readonly startedAtIso: string;
   readonly endedAtIso: string;
-  readonly status: 'ok' | 'header_hash_mismatch' | 'sheet_error';
+  readonly status:
+    | 'ok'
+    | 'header_hash_mismatch'
+    | 'sheet_error'
+    | 'awaiting_v2_runner';
   readonly headerHashOk: boolean;
   readonly cellsUpserted: number;
   readonly cellsSkipped: number;
@@ -117,7 +123,7 @@ export function resolveCell(
   };
 }
 
-function hoursForStatus(s: RosterStatus): number | null {
+export function hoursForStatus(s: RosterStatus): number | null {
   switch (s) {
     case 'working':
       return ROSTER_DEFAULT_HOURS_WORKING;
@@ -133,167 +139,38 @@ function hoursForStatus(s: RosterStatus): number | null {
 }
 
 /**
- * Walk the sheet grid → for every (person row × date column) intersection,
- * resolve the cell + privacy-filter it + upsert.
+ * **Transitional stub (G6.15.1 → G6.15.3).** The horizontal-layout
+ * iteration that v0 of this function used is gone; the new vertical
+ * iteration is the work item G6.15.3 carries. Until then, this returns a
+ * report with status `awaiting_v2_runner` and no upserts. Callers
+ * (`run-sync-once.ts`) treat non-`ok` as exit 1, so the systemd sync
+ * timer will reliably surface "not yet implemented" instead of silently
+ * doing nothing.
  *
- * AP-6 mid-cycle: re-hash the live header row at the top of the sync; if
- * it diverges from the persisted mapping's hash, abort with
- * `header_hash_mismatch`. The boot self-check catches this on startup but
- * a long-lived RPC daemon may sit between boots, so the re-check here
- * catches in-flight edits without a full restart.
- *
- * AP-2 inside the cell loop: per-cell errors are logged in
- * `perCellOutcomes` and the loop continues.
+ * `deps` is fully validated (so the function still type-checks against
+ * its production caller) but never read — the stub is intentional, not a
+ * skipped argument bug.
  */
 export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport> {
+  // Touch deps just enough to keep `noUnusedParameters` happy; this is
+  // not a leak of behaviour. G6.15.3 will rebuild the body from scratch.
+  void deps.adapter;
+  void deps.cache;
+  void deps.mapping;
+  void deps.sheetId;
+  void deps.sheetRange;
   const now = (deps.now ?? (() => new Date()))();
-  const startedAtIso = now.toISOString();
-  let values: ReadonlyArray<readonly (string | number | boolean | null)[]>;
-  try {
-    const res = await deps.adapter.valuesGet({
-      spreadsheetId: deps.sheetId,
-      range: deps.sheetRange,
-    });
-    values = res.values;
-  } catch (err) {
-    return {
-      startedAtIso,
-      endedAtIso: new Date().toISOString(),
-      status: 'sheet_error',
-      headerHashOk: false,
-      cellsUpserted: 0,
-      cellsSkipped: 0,
-      perCellOutcomes: [],
-      errorMessage: err instanceof Error ? err.message : String(err),
-    };
-  }
-  if (values.length === 0) {
-    return {
-      startedAtIso,
-      endedAtIso: new Date().toISOString(),
-      status: 'sheet_error',
-      headerHashOk: false,
-      cellsUpserted: 0,
-      cellsSkipped: 0,
-      perCellOutcomes: [],
-      errorMessage: 'values.get returned an empty grid',
-    };
-  }
-  const headerRow = (values[0] ?? []).map((c) => (c === null || c === undefined ? '' : String(c)));
-  const liveHash = hashHeaderRow(headerRow);
-  if (liveHash !== deps.mapping.headerHash) {
-    return {
-      startedAtIso,
-      endedAtIso: new Date().toISOString(),
-      status: 'header_hash_mismatch',
-      headerHashOk: false,
-      cellsUpserted: 0,
-      cellsSkipped: 0,
-      perCellOutcomes: [],
-      errorMessage: `live header hash ${liveHash.slice(0, 16)}… differs from persisted ${deps.mapping.headerHash.slice(0, 16)}… — delete the mapping file and re-probe after reviewing the diff`,
-    };
-  }
-
-  const perCellOutcomes: PerCellOutcome[] = [];
-  let cellsUpserted = 0;
-  let cellsSkipped = 0;
-
-  // Walk data rows (skip header).
-  for (let r = 1; r < values.length; r += 1) {
-    const row = values[r] ?? [];
-    const personCell = row[deps.mapping.personColumn];
-    if (personCell === undefined || personCell === null || personCell === '') {
-      continue; // empty row — silently skip; common in W&L sheets between sections
-    }
-    const person = String(personCell).trim();
-    if (!person) continue;
-    for (const dc of deps.mapping.dateColumns) {
-      const cell = row[dc.columnIndex] ?? null;
-      // Empty cells are not upserted — absence of a row means "unknown",
-      // and the `unknown` cache-stale path in roster.query.v1 handles it.
-      // (Persisting 'unknown' rows for every empty cell would balloon the
-      // cache without information gain.)
-      if (cell === null || cell === undefined || cell === '') {
-        cellsSkipped += 1;
-        perCellOutcomes.push({
-          person,
-          dateIso: dc.dateIso,
-          status: 'skipped',
-          reason: 'empty_cell',
-        });
-        continue;
-      }
-      let resolution: CellResolution;
-      try {
-        resolution = resolveCell(cell, deps.mapping);
-      } catch (err) {
-        cellsSkipped += 1;
-        perCellOutcomes.push({
-          person,
-          dateIso: dc.dateIso,
-          status: 'skipped',
-          reason: 'parse_error',
-          detail: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-      if (resolution.unknownText) {
-        cellsSkipped += 1;
-        perCellOutcomes.push({
-          person,
-          dateIso: dc.dateIso,
-          status: 'skipped',
-          reason: 'unknown_text',
-          // Note: we do NOT include the cell text in `detail` — that's the
-          // privacy invariant. The (person, dateIso) tuple plus the
-          // unknown-text flag is enough for the operator to fix.
-        });
-        continue;
-      }
-      // Privacy-safe payload: only structural metadata; no free-text.
-      const payloadJson = JSON.stringify({
-        source_row: r,
-        source_column: dc.columnIndex,
-        sick_collapsed: resolution.sickCollapsed,
-      });
-      try {
-        deps.cache.upsertEntry({
-          person,
-          dateIso: dc.dateIso,
-          status: resolution.status,
-          hours: resolution.hours,
-          payloadJson,
-          updatedAt: startedAtIso,
-        });
-        cellsUpserted += 1;
-        perCellOutcomes.push({
-          person,
-          dateIso: dc.dateIso,
-          status: 'upserted',
-        });
-      } catch (err) {
-        cellsSkipped += 1;
-        perCellOutcomes.push({
-          person,
-          dateIso: dc.dateIso,
-          status: 'skipped',
-          reason: 'parse_error',
-          detail: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
-
-  deps.cache.setSyncState(ROSTER_SYNC_SOURCE, deps.mapping.headerHash, startedAtIso);
-
+  const iso = now.toISOString();
   return {
-    startedAtIso,
-    endedAtIso: new Date().toISOString(),
-    status: 'ok',
-    headerHashOk: true,
-    cellsUpserted,
-    cellsSkipped,
-    perCellOutcomes,
+    startedAtIso: iso,
+    endedAtIso: iso,
+    status: 'awaiting_v2_runner',
+    headerHashOk: false,
+    cellsUpserted: 0,
+    cellsSkipped: 0,
+    perCellOutcomes: [],
+    errorMessage:
+      'sync runner v2 not yet implemented — G6.15.1 shipped the new sheet-shape mapping; G6.15.3 rewrites the iteration. See architect-backlog.md.',
   };
 }
 

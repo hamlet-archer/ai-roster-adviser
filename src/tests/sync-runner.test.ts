@@ -1,17 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+/**
+ * Transitional sync-runner tests for the G6.15.1 → G6.15.3 window.
+ *
+ * G6.15.1 (this PR) bumped `SheetShapeMapping` from horizontal to vertical
+ * layout, which means the v0 horizontal-iteration body of `runSyncCycle`
+ * is gone. G6.15.3 will rewrite the iteration against the new shape.
+ *
+ * Until then, `runSyncCycle` returns a fixed `awaiting_v2_runner` report
+ * — the tests below pin that contract. The shape-agnostic helpers
+ * (`resolveCell`, status enum + privacy filter) still ship value
+ * standalone and are covered in full.
+ */
 
-import { RosterCache } from '../cache.js';
-import {
-  GoogleSheetsUserOauthAdapter,
-  type ValuesGetOptions,
-  type ValuesGetResult,
-} from '../google-sheets-user-oauth-adapter.js';
+import { describe, expect, it } from 'vitest';
+
 import {
   DEFAULT_STATUS_VALUE_MAP,
-  hashHeaderRow,
+  hashHeaderRows,
   SHEET_MAPPING_SCHEMA_VERSION,
   type SheetShapeMapping,
 } from '../sheet-shape-mapping.js';
@@ -19,47 +23,25 @@ import {
   resolveCell,
   ROSTER_DEFAULT_HOURS_HALF_DAY,
   ROSTER_DEFAULT_HOURS_WORKING,
-  ROSTER_SYNC_SOURCE,
+  hoursForStatus,
   runSyncCycle,
 } from '../sync-runner.js';
 
-function makeStubAdapter(
-  handler: (opts: ValuesGetOptions) => ValuesGetResult | Promise<ValuesGetResult>,
-): GoogleSheetsUserOauthAdapter {
-  return new GoogleSheetsUserOauthAdapter({
-    spreadsheets: {
-      values: {
-        get: async (params: { spreadsheetId: string; range: string }) => {
-          const res = await handler({
-            spreadsheetId: params.spreadsheetId,
-            range: params.range,
-          });
-          return { data: { values: res.values } };
-        },
-      },
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
-}
-
-function fixtureMapping(headerRow: readonly string[]): SheetShapeMapping {
+function fixtureMapping(): SheetShapeMapping {
+  const row1 = ['', 'Sally'];
+  const row2 = ['Date', 'Day'];
   return {
     version: SHEET_MAPPING_SCHEMA_VERSION,
-    headerHash: hashHeaderRow(headerRow),
-    personColumn: 0,
-    personColumnHeader: headerRow[0] ?? 'Name',
-    dateColumns: headerRow.slice(1).map((h, i) => ({
-      columnIndex: i + 1,
-      headerText: h,
-      dateIso: h,
-    })),
+    headerHash: hashHeaderRows(row1, row2),
+    dateColumn: 0,
+    staffColumns: { Sally: { day: 1 } },
     statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },
-    probedAt: '2026-05-13T14:11:05Z',
+    probedAt: '2026-05-21T19:11:05Z',
   };
 }
 
 describe('resolveCell — privacy filter precedence', () => {
-  const mapping = fixtureMapping(['Name', '2026-05-13']);
+  const mapping = fixtureMapping();
 
   it('collapses any /sick/i cell text to status sick with hours null', () => {
     expect(resolveCell('sick', mapping)).toEqual({
@@ -113,159 +95,35 @@ describe('resolveCell — privacy filter precedence', () => {
   });
 });
 
-describe('runSyncCycle', () => {
-  let dir: string;
-  let cache: RosterCache;
-  const headerRow = ['Name', '2026-05-13', '2026-05-14'];
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'roster-sync-'));
-    cache = new RosterCache({ path: join(dir, 'roster.db') });
+describe('hoursForStatus', () => {
+  it('returns 8 for working and 4 for half-day', () => {
+    expect(hoursForStatus('working')).toBe(ROSTER_DEFAULT_HOURS_WORKING);
+    expect(hoursForStatus('half-day')).toBe(ROSTER_DEFAULT_HOURS_HALF_DAY);
   });
 
-  afterEach(() => {
-    cache.close();
-    rmSync(dir, { recursive: true, force: true });
+  it('returns null for non-working statuses', () => {
+    expect(hoursForStatus('leave')).toBeNull();
+    expect(hoursForStatus('sick')).toBeNull();
+    expect(hoursForStatus('public-holiday')).toBeNull();
+    expect(hoursForStatus('unknown')).toBeNull();
   });
+});
 
-  it('upserts every resolvable cell from a typical W&L grid', async () => {
-    const mapping = fixtureMapping(headerRow);
-    const adapter = makeStubAdapter(() => ({
-      values: [
-        headerRow,
-        ['Sally', 'W', 'L'],
-        ['Chloe', 'half', 'W'],
-        ['Kelvin', '', 'W'],
-      ],
-    }));
+describe('runSyncCycle — transitional stub (awaiting G6.15.3)', () => {
+  it('returns awaiting_v2_runner with no upserts', async () => {
+    const mapping = fixtureMapping();
     const report = await runSyncCycle({
-      adapter,
-      cache,
+      // The stub never touches these — pass placeholders to satisfy types.
+      adapter: { valuesGet: async () => ({ values: [] }) } as never,
+      cache: {} as never,
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      now: () => new Date('2026-05-21T19:11:05Z'),
     });
-    expect(report.status).toBe('ok');
-    expect(report.cellsUpserted).toBe(5); // 6 cells, 1 empty (Kelvin 2026-05-13)
-    expect(report.cellsSkipped).toBe(1);
-    expect(cache.getEntry({ person: 'Sally', dateIso: '2026-05-13' })?.status).toBe('working');
-    expect(cache.getEntry({ person: 'Sally', dateIso: '2026-05-14' })?.status).toBe('leave');
-    expect(cache.getEntry({ person: 'Chloe', dateIso: '2026-05-13' })?.status).toBe('half-day');
-    expect(cache.getEntry({ person: 'Kelvin', dateIso: '2026-05-13' })).toBeNull();
-    expect(cache.getEntry({ person: 'Kelvin', dateIso: '2026-05-14' })?.status).toBe('working');
-  });
-
-  it('privacy filter: cell text containing sick → status sick, never leaks notes', async () => {
-    const mapping = fixtureMapping(headerRow);
-    const adapter = makeStubAdapter(() => ({
-      values: [headerRow, ['Sally', 'sick - migraine', 'W']],
-    }));
-    const report = await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    expect(report.status).toBe('ok');
-    const entry = cache.getEntry({ person: 'Sally', dateIso: '2026-05-13' });
-    expect(entry?.status).toBe('sick');
-    expect(entry?.hours).toBeNull();
-    // PRIVACY-CRITICAL ASSERTION: the cell text "migraine" must not appear
-    // anywhere in the persisted payload_json or any derived field.
-    expect(JSON.stringify(entry)).not.toMatch(/migraine/i);
-    // The sick_collapsed flag is set as structural metadata (not free-text).
-    const payload = JSON.parse(entry?.payloadJson ?? '{}') as { sick_collapsed?: boolean };
-    expect(payload.sick_collapsed).toBe(true);
-  });
-
-  it('aborts with header_hash_mismatch when the live header drifts (AP-6, no auto-reprobe)', async () => {
-    const mapping = fixtureMapping(['Name', '2026-05-13']);
-    const adapter = makeStubAdapter(() => ({
-      values: [['Name', '2026-05-14'], ['Sally', 'W']],
-    }));
-    const report = await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    expect(report.status).toBe('header_hash_mismatch');
+    expect(report.status).toBe('awaiting_v2_runner');
     expect(report.cellsUpserted).toBe(0);
-    expect(report.errorMessage).toMatch(/header hash/);
-    expect(cache.getEntry({ person: 'Sally', dateIso: '2026-05-14' })).toBeNull();
-  });
-
-  it('returns sheet_error when values.get throws (AP-2 — no cache corruption)', async () => {
-    const mapping = fixtureMapping(headerRow);
-    const adapter = makeStubAdapter(() => {
-      throw new Error('rate-limited by Google');
-    });
-    const report = await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    expect(report.status).toBe('sheet_error');
-    expect(report.errorMessage).toMatch(/rate-limited/);
-  });
-
-  it('skips empty rows + records unknown_text reason without leaking the cell text', async () => {
-    const mapping = fixtureMapping(headerRow);
-    const adapter = makeStubAdapter(() => ({
-      values: [headerRow, ['Sally', 'Maybe later', 'W'], ['', '', '']],
-    }));
-    const report = await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    expect(report.status).toBe('ok');
-    expect(report.cellsUpserted).toBe(1);
-    const unknown = report.perCellOutcomes.find((o) => o.reason === 'unknown_text');
-    expect(unknown).toBeDefined();
-    expect(unknown?.person).toBe('Sally');
-    expect(unknown?.dateIso).toBe('2026-05-13');
-    // Privacy: detail must not carry the cell text.
-    expect(JSON.stringify(unknown)).not.toMatch(/maybe later/i);
-  });
-
-  it('updates sync_state with the live header hash after a successful cycle', async () => {
-    const mapping = fixtureMapping(headerRow);
-    const adapter = makeStubAdapter(() => ({
-      values: [headerRow, ['Sally', 'W', 'L']],
-    }));
-    const before = cache.getSyncState(ROSTER_SYNC_SOURCE);
-    expect(before).toBeNull();
-    await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    const after = cache.getSyncState(ROSTER_SYNC_SOURCE);
-    expect(after?.headerHash).toBe(mapping.headerHash);
-    expect(after?.lastSyncIso).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  });
-
-  it('does NOT update sync_state when the cycle aborts on hash mismatch', async () => {
-    const mapping = fixtureMapping(['Name', '2026-05-13']);
-    const adapter = makeStubAdapter(() => ({
-      values: [['Name', '2026-05-14'], ['Sally', 'W']],
-    }));
-    await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId: 'test',
-      sheetRange: 'A1:ZZ',
-    });
-    expect(cache.getSyncState(ROSTER_SYNC_SOURCE)).toBeNull();
+    expect(report.cellsSkipped).toBe(0);
+    expect(report.errorMessage).toMatch(/G6\.15\.3/);
   });
 });

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import {
   DEFAULT_STATUS_VALUE_MAP,
-  hashHeaderRow,
+  hashHeaderRows,
+  KNOWN_SUB_COLUMN_NAMES,
   loadMappingFromFile,
   parseMappingYaml,
   renderMappingYaml,
@@ -13,6 +14,7 @@ import {
   saveMappingToFile,
   SHEET_MAPPING_SCHEMA_VERSION,
   SheetShapeMappingError,
+  SUB_COLUMN_KEYS,
   type SheetShapeMapping,
 } from '../sheet-shape-mapping.js';
 
@@ -20,38 +22,65 @@ function mkMapping(over: Partial<SheetShapeMapping> = {}): SheetShapeMapping {
   return {
     version: SHEET_MAPPING_SCHEMA_VERSION,
     headerHash: 'a'.repeat(64),
-    personColumn: 0,
-    personColumnHeader: 'Name',
-    dateColumns: [
-      { columnIndex: 1, headerText: '2026-05-13', dateIso: '2026-05-13' },
-    ],
+    dateColumn: 0,
+    staffColumns: {
+      Sally: { day: 3, night: 4, remarks: 5 },
+      Chloe: { day: 6, night: 7, dayValue: 8, nightValue: 9, overtime: 10, annualLeave: 11, remarks: 12 },
+    },
     statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },
-    probedAt: '2026-05-13T14:11:05Z',
+    probedAt: '2026-05-21T19:11:05Z',
     ...over,
   };
 }
 
-describe('hashHeaderRow', () => {
+describe('schema-version constant', () => {
+  it('is bumped to 2 (vertical layout)', () => {
+    // G6.15.1 contract: v1 → v2 so persisted v1 mappings get re-probed.
+    expect(SHEET_MAPPING_SCHEMA_VERSION).toBe(2);
+  });
+});
+
+describe('KNOWN_SUB_COLUMN_NAMES + SUB_COLUMN_KEYS', () => {
+  it('covers all 7 expected sub-columns', () => {
+    expect(SUB_COLUMN_KEYS).toHaveLength(7);
+    expect(new Set(Object.values(KNOWN_SUB_COLUMN_NAMES))).toEqual(new Set(SUB_COLUMN_KEYS));
+  });
+
+  it('uses exact-case row-2 text as keys (case-sensitive lookup)', () => {
+    expect(KNOWN_SUB_COLUMN_NAMES['Day']).toBe('day');
+    expect(KNOWN_SUB_COLUMN_NAMES['Annual Leave']).toBe('annualLeave');
+    expect(KNOWN_SUB_COLUMN_NAMES['day']).toBeUndefined();
+    expect(KNOWN_SUB_COLUMN_NAMES['annual leave']).toBeUndefined();
+  });
+});
+
+describe('hashHeaderRows', () => {
   it('produces a 64-char hex digest', () => {
-    const h = hashHeaderRow(['Name', '2026-05-13']);
+    const h = hashHeaderRows(['', '', '', 'Sally'], ['Date', 'DOW', '', 'Day']);
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('absorbs cosmetic edits (case + trailing spaces)', () => {
-    const a = hashHeaderRow(['Name', '2026-05-13']);
-    const b = hashHeaderRow(['  name  ', '  2026-05-13  ']);
+    const a = hashHeaderRows(['', '', '', 'Sally'], ['Date', 'DOW', '', 'Day']);
+    const b = hashHeaderRows(['', '', '', '  sally  '], ['DATE', 'dow', '', 'day']);
     expect(a).toBe(b);
   });
 
-  it('differs when a date column changes', () => {
-    const a = hashHeaderRow(['Name', '2026-05-13']);
-    const b = hashHeaderRow(['Name', '2026-05-14']);
+  it('differs when a staff label changes', () => {
+    const a = hashHeaderRows(['', '', '', 'Sally'], ['Date', 'DOW', '', 'Day']);
+    const b = hashHeaderRows(['', '', '', 'Sandy'], ['Date', 'DOW', '', 'Day']);
+    expect(a).not.toBe(b);
+  });
+
+  it('differs when row 2 picks up a new sub-header', () => {
+    const a = hashHeaderRows(['', '', '', 'Sally'], ['Date', 'DOW', '', 'Day']);
+    const b = hashHeaderRows(['', '', '', 'Sally'], ['Date', 'DOW', '', 'Day', 'Night']);
     expect(a).not.toBe(b);
   });
 
   it('differs when an empty trailing column appears (column count is significant)', () => {
-    const a = hashHeaderRow(['Name', '2026-05-13']);
-    const b = hashHeaderRow(['Name', '2026-05-13', '']);
+    const a = hashHeaderRows(['Sally'], ['Day']);
+    const b = hashHeaderRows(['Sally'], ['Day', '']);
     expect(a).not.toBe(b);
   });
 });
@@ -62,6 +91,23 @@ describe('renderMappingYaml + parseMappingYaml', () => {
     const yaml = renderMappingYaml(m);
     const parsed = parseMappingYaml(yaml);
     expect(parsed).toEqual(m);
+  });
+
+  it('emits sub-column keys in canonical order (day, night, dayValue, …)', () => {
+    // Insertion-shuffled input should still serialise in the canonical
+    // SUB_COLUMN_KEYS order for diff stability.
+    const m = mkMapping({
+      staffColumns: {
+        Sally: { remarks: 5, day: 3, night: 4 } as never,
+      },
+    });
+    const yaml = renderMappingYaml(m);
+    const idxDay = yaml.indexOf('    day: ');
+    const idxNight = yaml.indexOf('    night: ');
+    const idxRemarks = yaml.indexOf('    remarks: ');
+    expect(idxDay).toBeGreaterThan(-1);
+    expect(idxNight).toBeGreaterThan(idxDay);
+    expect(idxRemarks).toBeGreaterThan(idxNight);
   });
 
   it('sorts statusValueToEnumMap keys for diff stability', () => {
@@ -76,10 +122,31 @@ describe('renderMappingYaml + parseMappingYaml', () => {
     expect(aIdx).toBeLessThan(zIdx);
   });
 
-  it('rejects a version mismatch', () => {
+  it('rejects a v1 mapping (version mismatch — re-probe required)', () => {
     const m = mkMapping();
-    const text = renderMappingYaml(m).replace(/version: 1/, 'version: 99');
+    const text = renderMappingYaml(m).replace(/version: 2/, 'version: 1');
     expect(() => parseMappingYaml(text)).toThrow(SheetShapeMappingError);
+  });
+
+  it('rejects an unknown sub-column key', () => {
+    const m = mkMapping({
+      staffColumns: {
+        Sally: { day: 3, made_up_key: 99 as unknown as never } as never,
+      },
+    });
+    const yaml = renderMappingYaml(m);
+    // renderMappingYaml drops unknown keys silently (canonical order
+    // emit); inject the bad key by hand to test the parser guard.
+    const tampered = yaml.replace('  Sally:\n    day: 3\n', '  Sally:\n    day: 3\n    made_up_key: 99\n');
+    expect(() => parseMappingYaml(tampered)).toThrow(/unknown sub-column|invalid_staff/);
+  });
+
+  it('rejects a staff entry with no sub-columns', () => {
+    const tampered = renderMappingYaml(mkMapping()).replace(
+      /  Sally:\n    day: 3\n    night: 4\n    remarks: 5\n/,
+      '  Sally: {}\n',
+    );
+    expect(() => parseMappingYaml(tampered)).toThrow(/at least one sub-column|invalid_staff/);
   });
 
   it('rejects an invalid status enum value', () => {
@@ -89,19 +156,18 @@ describe('renderMappingYaml + parseMappingYaml', () => {
     expect(() => parseMappingYaml(yaml)).toThrow(/invalid_status_enum|invalid status/);
   });
 
-  it('rejects an invalid date format in a date column', () => {
-    const yaml = renderMappingYaml(
-      mkMapping({
-        dateColumns: [
-          { columnIndex: 1, headerText: 'bogus', dateIso: '13-05-2026' },
-        ],
-      }),
-    );
-    expect(() => parseMappingYaml(yaml)).toThrow(SheetShapeMappingError);
+  it('rejects an empty staffColumns map', () => {
+    const tampered = renderMappingYaml(mkMapping()).replace(/staffColumns:\n[\s\S]*?statusValueToEnumMap:/, 'staffColumns: {}\nstatusValueToEnumMap:');
+    expect(() => parseMappingYaml(tampered)).toThrow(/at least one staff/);
   });
 
   it('rejects malformed YAML', () => {
     expect(() => parseMappingYaml('::: not yaml :::')).toThrow(SheetShapeMappingError);
+  });
+
+  it('rejects a negative dateColumn', () => {
+    const tampered = renderMappingYaml(mkMapping()).replace(/dateColumn: 0/, 'dateColumn: -1');
+    expect(() => parseMappingYaml(tampered)).toThrow(/dateColumn/);
   });
 });
 
@@ -121,7 +187,7 @@ describe('save + load round-trip on disk', () => {
     const mode = statSync(path).mode & 0o777;
     expect(mode).toBe(0o600);
     const text = readFileSync(path, 'utf-8');
-    expect(text).toContain('version: 1');
+    expect(text).toContain('version: 2');
   });
 
   it('loadMappingFromFile returns null when the file is missing', () => {

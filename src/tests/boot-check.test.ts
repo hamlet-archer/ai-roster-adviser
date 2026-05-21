@@ -11,10 +11,10 @@ import {
   type ValuesGetResult,
 } from '../google-sheets-user-oauth-adapter.js';
 import {
-  hashHeaderRow,
-  type SheetShapeMapping,
-  SHEET_MAPPING_SCHEMA_VERSION,
   DEFAULT_STATUS_VALUE_MAP,
+  hashHeaderRows,
+  SHEET_MAPPING_SCHEMA_VERSION,
+  type SheetShapeMapping,
 } from '../sheet-shape-mapping.js';
 
 function makeStubAdapter(
@@ -57,26 +57,30 @@ function memoryMappingIO(initial: SheetShapeMapping | null = null): MemoryIO {
 
 const ENV: BootCheckDeps['env'] = {
   ROSTER_SHEET_ID: 'test-sheet',
-  ROSTER_SHEET_RANGE: 'A1:E1',
+  ROSTER_SHEET_RANGE: 'A1:E200',
   ROSTER_SHEET_MAPPING_PATH: '/tmp/this-is-overridden-by-mappingIO',
 };
 
+// Minimal vertical-layout fixture used across boot-check tests.
+const GOOD_GRID: ReadonlyArray<ReadonlyArray<string | number | boolean | null>> = [
+  ['', 'Sally'],
+  ['Date', 'Day'],
+  ['2025-11-10', 'Work'],
+];
+
 describe('runBootCheck — first-boot path', () => {
-  it('probes the sheet and persists a fresh mapping', async () => {
-    const adapter = makeStubAdapter(() => ({
-      values: [['Name', '2026-05-13', '2026-05-14']],
-    }));
+  it('probes the sheet and persists a fresh vertical mapping', async () => {
+    const adapter = makeStubAdapter(() => ({ values: GOOD_GRID }));
     const io = memoryMappingIO();
     const result = await runBootCheck({ adapter, env: ENV, mappingIO: io });
     expect(result.sheetId).toBe('test-sheet');
-    expect(result.mapping.dateColumns).toHaveLength(2);
+    expect(result.mapping.dateColumn).toBe(0);
+    expect(Object.keys(result.mapping.staffColumns)).toEqual(['Sally']);
     expect(io.saved).not.toBeNull();
-    expect(io.saved!.headerHash).toBe(
-      hashHeaderRow(['Name', '2026-05-13', '2026-05-14']),
-    );
+    expect(io.saved!.headerHash).toBe(hashHeaderRows(GOOD_GRID[0]!, GOOD_GRID[1]!));
   });
 
-  it('fails loud when the sheet header row is empty', async () => {
+  it('fails loud when values.get returns no rows', async () => {
     const adapter = makeStubAdapter(() => ({ values: [] }));
     const io = memoryMappingIO();
     await expect(runBootCheck({ adapter, env: ENV, mappingIO: io })).rejects.toBeInstanceOf(
@@ -84,9 +88,13 @@ describe('runBootCheck — first-boot path', () => {
     );
   });
 
-  it('fails loud when no date columns are detectable', async () => {
+  it('fails loud at sheet-shape-probe step when column A has no dates', async () => {
     const adapter = makeStubAdapter(() => ({
-      values: [['Name', 'Notes', 'Other']],
+      values: [
+        ['', 'Sally'],
+        ['Date', 'Day'],
+        ['Not a date', 'Work'],
+      ],
     }));
     const io = memoryMappingIO();
     try {
@@ -95,6 +103,26 @@ describe('runBootCheck — first-boot path', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(BootCheckError);
       expect((err as BootCheckError).diagnostic.step).toBe('sheet-shape-probe');
+      expect((err as BootCheckError).diagnostic.detail?.reason).toBe('no_date_rows');
+    }
+  });
+
+  it('fails loud at sheet-shape-probe step when row 1 has no staff labels', async () => {
+    const adapter = makeStubAdapter(() => ({
+      values: [
+        ['', ''],
+        ['Date', 'Day'],
+        ['2025-11-10', 'Work'],
+      ],
+    }));
+    const io = memoryMappingIO();
+    try {
+      await runBootCheck({ adapter, env: ENV, mappingIO: io });
+      expect.fail('expected BootCheckError');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BootCheckError);
+      expect((err as BootCheckError).diagnostic.step).toBe('sheet-shape-probe');
+      expect((err as BootCheckError).diagnostic.detail?.reason).toBe('no_staff_labels');
     }
   });
 
@@ -119,20 +147,15 @@ describe('runBootCheck — first-boot path', () => {
 describe('runBootCheck — persisted-mapping path', () => {
   const goodMapping: SheetShapeMapping = {
     version: SHEET_MAPPING_SCHEMA_VERSION,
-    headerHash: hashHeaderRow(['Name', '2026-05-13']),
-    personColumn: 0,
-    personColumnHeader: 'Name',
-    dateColumns: [
-      { columnIndex: 1, headerText: '2026-05-13', dateIso: '2026-05-13' },
-    ],
+    headerHash: hashHeaderRows(GOOD_GRID[0]!, GOOD_GRID[1]!),
+    dateColumn: 0,
+    staffColumns: { Sally: { day: 1 } },
     statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },
-    probedAt: '2026-05-13T14:11:05Z',
+    probedAt: '2026-05-21T19:11:05Z',
   };
 
-  it('passes when the live header matches the persisted hash', async () => {
-    const adapter = makeStubAdapter(() => ({
-      values: [['Name', '2026-05-13']],
-    }));
+  it('passes when the live header rows match the persisted hash', async () => {
+    const adapter = makeStubAdapter(() => ({ values: GOOD_GRID }));
     const io = memoryMappingIO(goodMapping);
     const result = await runBootCheck({ adapter, env: ENV, mappingIO: io });
     expect(result.mapping).toEqual(goodMapping);
@@ -142,7 +165,11 @@ describe('runBootCheck — persisted-mapping path', () => {
 
   it('fails loud (AP-6, no auto-reprobe) when live hash differs', async () => {
     const adapter = makeStubAdapter(() => ({
-      values: [['Name', '2026-05-14']], // different date column
+      values: [
+        ['', 'Sandy'], // different staff name in row 1
+        ['Date', 'Day'],
+        ['2025-11-10', 'Work'],
+      ],
     }));
     const io = memoryMappingIO(goodMapping);
     try {
@@ -158,7 +185,7 @@ describe('runBootCheck — persisted-mapping path', () => {
   });
 
   it('reports the mapping-load step with reason on a corrupt persisted mapping', async () => {
-    const adapter = makeStubAdapter(() => ({ values: [['Name', '2026-05-13']] }));
+    const adapter = makeStubAdapter(() => ({ values: GOOD_GRID }));
     const io: BootCheckDeps['mappingIO'] = {
       load: () => {
         throw new Error('mapping YAML parse failed: line 1: malformed');
