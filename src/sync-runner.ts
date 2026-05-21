@@ -14,8 +14,9 @@
  *      Remarks cell text is fed to the resolver ONLY so the `/sick/i`
  *      heuristic can fire — it is not persisted in any field.
  *   2. The `payload_json` column carries only structural metadata
- *      (`source_row`, `staff_day_col`, `sick_collapsed`) — never
- *      free-text from the sheet.
+ *      (`source_row`, `staff_day_col`, `sick_collapsed`,
+ *      `annual_leave_remaining` numeric balance) — never free-text
+ *      from the sheet.
  *   3. There is no `notes` column anywhere in the cache; the privacy
  *      filter is the runtime guard.
  */
@@ -114,6 +115,26 @@ export function resolveCell(
   };
 }
 
+/**
+ * Parse the `Annual Leave` cell as a numeric running balance. Returns
+ * `null` for non-numeric cells (empty, `-`, dashes). G6.15.5: the balance
+ * is recorded in payload metadata only (for future "AL days remaining"
+ * reporting) — it never drives status resolution.
+ */
+export function parseAnnualLeaveBalance(
+  cell: string | number | boolean | null | undefined,
+): number | null {
+  if (cell === null || cell === undefined || cell === '') return null;
+  if (typeof cell === 'number' && Number.isFinite(cell)) return cell;
+  if (typeof cell === 'string') {
+    const trimmed = cell.trim();
+    if (trimmed === '' || trimmed === '-') return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 export function hoursForStatus(s: RosterStatus): number | null {
   switch (s) {
     case 'working':
@@ -151,9 +172,14 @@ export interface StaffDayCellInput {
 }
 
 /**
- * Resolve one (staff, date) row's status, applying the G6.15.2 rule
- * priority. Returns the same `CellResolution` shape as `resolveCell` so
- * G6.15.3 can route per-cell outcomes uniformly.
+ * Resolve one (staff, date) row's status. G6.15.5 (2026-05-21) dropped the
+ * `Annual Leave > 0` override from G6.15.2 — the W&L sheet's `Annual Leave`
+ * column carries the *running balance* of remaining AL days, not a per-day
+ * leave flag, so the override mis-classified essentially every populated
+ * row as `leave`. The Day cell + per-staff `statusValueToEnumMap` is now
+ * the only status signal; `annualLeaveCell` is recorded in payload metadata
+ * at the call site (see `runSyncCycle`) for future balance-remaining
+ * reporting, never as status.
  *
  * Priority order (highest first):
  *
@@ -161,19 +187,15 @@ export interface StaffDayCellInput {
  *      contains `/sick/i`, the row is `sick`, hours `null`. No further
  *      detail is returned (privacy invariant per
  *      `project_roster_semantics`).
- *   2. **Annual Leave override** — if the staff has an `annualLeave`
- *      column AND its cell is a number > 0, the row is `leave` regardless
- *      of what the Day cell says. The W&L sheet's Annual Leave column is
- *      the formal leave signal.
- *   3. **Per-staff statusValueToEnumMap** — lowercased + trimmed Day cell
+ *   2. **Per-staff statusValueToEnumMap** — lowercased + trimmed Day cell
  *      text is looked up against `staffColumns[name].statusValueToEnumMap`
  *      first.
- *   4. **Global fallback map** — if no per-staff hit, the lookup falls
+ *   3. **Global fallback map** — if no per-staff hit, the lookup falls
  *      back to `mapping.statusValueToEnumMap`.
- *   5. **Numeric Day cell** — if the Day cell is a number (Chloe's
+ *   4. **Numeric Day cell** — if the Day cell is a number (Chloe's
  *      convention), `> 0 → working`, `0 → not-working`. This fires only
  *      when neither per-staff nor global lookups had a hit.
- *   6. **Unknown** — empty cell → `unknown` + `unknownText: false`; any
+ *   5. **Unknown** — empty cell → `unknown` + `unknownText: false`; any
  *      other unrecognised text → `unknown` + `unknownText: true`.
  */
 export function resolveStaffDayCell(
@@ -191,21 +213,7 @@ export function resolveStaffDayCell(
     return { status: 'sick', hours: null, sickCollapsed: true, unknownText: false };
   }
 
-  // 2. Annual Leave override — formal leave signal beats per-staff map.
-  if (staff?.annualLeave !== undefined && input.annualLeaveCell !== undefined) {
-    const al = input.annualLeaveCell;
-    if (typeof al === 'number' && Number.isFinite(al) && al > 0) {
-      return { status: 'leave', hours: null, sickCollapsed: false, unknownText: false };
-    }
-    if (typeof al === 'string' && al.trim() !== '' && al.trim() !== '-') {
-      const n = Number(al);
-      if (Number.isFinite(n) && n > 0) {
-        return { status: 'leave', hours: null, sickCollapsed: false, unknownText: false };
-      }
-    }
-  }
-
-  // 3-4. Lookup precedence: per-staff map → global fallback.
+  // 2-3. Lookup precedence: per-staff map → global fallback.
   const key = dayText.trim().toLowerCase();
   const perStaffHit = staff?.statusValueToEnumMap?.[key];
   if (perStaffHit) {
@@ -226,7 +234,7 @@ export function resolveStaffDayCell(
     };
   }
 
-  // 5. Numeric Day cell — Chloe's `Day Value` convention is numeric hours.
+  // 4. Numeric Day cell — Chloe's `Day Value` convention is numeric hours.
   if (typeof input.dayCell === 'number' && Number.isFinite(input.dayCell)) {
     if (input.dayCell > 0) {
       return {
@@ -244,7 +252,7 @@ export function resolveStaffDayCell(
     };
   }
 
-  // 6. Unknown.
+  // 5. Unknown.
   if (dayText === '') {
     return { status: 'unknown', hours: null, sickCollapsed: false, unknownText: false };
   }
@@ -271,8 +279,9 @@ export function resolveStaffDayCell(
  *      cache (the resolver returns only the status enum + boolean
  *      flag).
  *   2. The `payload_json` column carries only structural metadata
- *      (`source_row`, `staff_day_col`, `sick_collapsed`) — never
- *      free-text from the sheet.
+ *      (`source_row`, `staff_day_col`, `sick_collapsed`,
+ *      `annual_leave_remaining` numeric balance) — never free-text
+ *      from the sheet.
  */
 export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport> {
   const now = (deps.now ?? (() => new Date()))();
@@ -351,17 +360,15 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
         cols.annualLeave !== undefined ? (row[cols.annualLeave] ?? null) : undefined;
       const remarksCell =
         cols.remarks !== undefined ? (row[cols.remarks] ?? null) : undefined;
-      // Empty Day cell with no AL override + no sick-in-remarks → skip
-      // (don't pollute the cache with `unknown` rows for empty cells;
-      // matches v0 behaviour). The privacy / AL paths inside
-      // resolveStaffDayCell still fire on remarks / AL alone if needed.
+      // Empty Day cell with no sick-in-remarks → skip (don't pollute the
+      // cache with `unknown` rows for empty cells; matches v0 behaviour).
+      // G6.15.5: the AL > 0 escape hatch is gone — Annual Leave is a
+      // running balance column, not a per-day leave signal.
       const isEmptyDayCell = dayCell === null || dayCell === undefined || dayCell === '';
       const remarksText =
         remarksCell === null || remarksCell === undefined ? '' : String(remarksCell);
-      const annualLeaveTriggers =
-        typeof annualLeaveCell === 'number' && annualLeaveCell > 0;
       const sickInRemarks = /sick/i.test(remarksText);
-      if (isEmptyDayCell && !annualLeaveTriggers && !sickInRemarks) {
+      if (isEmptyDayCell && !sickInRemarks) {
         cellsSkipped += 1;
         perCellOutcomes.push({
           person: staffName,
@@ -400,10 +407,12 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
         });
         continue;
       }
+      const annualLeaveRemaining = parseAnnualLeaveBalance(annualLeaveCell);
       const payloadJson = JSON.stringify({
         source_row: r,
         staff_day_col: cols.day,
         sick_collapsed: resolution.sickCollapsed,
+        ...(annualLeaveRemaining !== null ? { annual_leave_remaining: annualLeaveRemaining } : {}),
       });
       try {
         deps.cache.upsertEntry({
