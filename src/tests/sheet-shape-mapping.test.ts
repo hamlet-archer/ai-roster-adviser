@@ -209,6 +209,67 @@ describe('save + load round-trip on disk', () => {
   });
 });
 
+describe('per-staff statusValueToEnumMap (G6.15.2)', () => {
+  it('round-trips a per-staff statusValueToEnumMap', () => {
+    const m = mkMapping({
+      staffColumns: {
+        Sally: {
+          day: 3,
+          night: 4,
+          remarks: 5,
+          statusValueToEnumMap: {
+            work: 'working',
+            pet: 'leave-other',
+            '-': 'not-working',
+            '': 'not-working',
+          },
+        },
+      },
+    });
+    const yaml = renderMappingYaml(m);
+    expect(yaml).toContain('pet: leave-other');
+    expect(yaml).toContain('work: working');
+    const parsed = parseMappingYaml(yaml);
+    expect(parsed.staffColumns.Sally?.statusValueToEnumMap).toEqual({
+      work: 'working',
+      pet: 'leave-other',
+      '-': 'not-working',
+      '': 'not-working',
+    });
+  });
+
+  it('rejects a per-staff statusValueToEnumMap with an invalid status enum', () => {
+    const yaml = renderMappingYaml(
+      mkMapping({
+        staffColumns: {
+          Sally: {
+            day: 3,
+            statusValueToEnumMap: { work: 'bogus-status' as never },
+          },
+        },
+      }),
+    );
+    expect(() => parseMappingYaml(yaml)).toThrow(/invalid status|invalid_status_enum/);
+  });
+
+  it('renders staff without per-staff map when statusValueToEnumMap is undefined', () => {
+    const m = mkMapping({
+      staffColumns: {
+        Unknown: { day: 1 },
+      },
+    });
+    const yaml = renderMappingYaml(m);
+    // The Unknown block (staff-indented sub-block) must not carry a per-staff
+    // statusValueToEnumMap line — that would be 4-space indented under
+    // `Unknown:`. The top-level `statusValueToEnumMap:` (2-space indent
+    // under the mapping root) is the global map and is allowed.
+    const unknownLine = yaml.indexOf('  Unknown:');
+    const nextTopLevel = yaml.indexOf('\nstatusValueToEnumMap:', unknownLine);
+    const unknownBlock = yaml.slice(unknownLine, nextTopLevel >= 0 ? nextTopLevel : yaml.length);
+    expect(unknownBlock).not.toMatch(/^\s{4}statusValueToEnumMap:/m);
+  });
+});
+
 describe('resolveMappingPath', () => {
   it('honours ROSTER_SHEET_MAPPING_PATH when set', () => {
     expect(resolveMappingPath({ ROSTER_SHEET_MAPPING_PATH: '/tmp/foo.yaml' })).toBe('/tmp/foo.yaml');

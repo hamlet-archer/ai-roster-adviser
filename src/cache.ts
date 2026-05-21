@@ -22,17 +22,21 @@ import { dirname } from 'node:path';
 export type RosterStatus =
   | 'working'
   | 'leave'
+  | 'leave-other'
   | 'half-day'
   | 'public-holiday'
   | 'sick'
+  | 'not-working'
   | 'unknown';
 
 export const ROSTER_STATUS_VALUES: readonly RosterStatus[] = [
   'working',
   'leave',
+  'leave-other',
   'half-day',
   'public-holiday',
   'sick',
+  'not-working',
   'unknown',
 ];
 

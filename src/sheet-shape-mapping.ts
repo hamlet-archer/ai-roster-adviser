@@ -85,6 +85,15 @@ export interface StaffSubColumns {
   readonly overtime?: number;
   readonly annualLeave?: number;
   readonly remarks?: number;
+  /**
+   * Per-staff cell-text → status enum (G6.15.2). Sally and Chloe use
+   * different cell conventions in the W&L sheet (Sally: `Work`/`Pet`/`-`;
+   * Chloe: `Full`/`Half`/`Off` + numeric Day Value). Keys are
+   * lowercased, trimmed; lookups MUST trim+lowercase the cell text. When
+   * empty / missing, the resolver falls back to the global
+   * `SheetShapeMapping.statusValueToEnumMap`.
+   */
+  readonly statusValueToEnumMap?: Readonly<Record<string, RosterStatus>>;
 }
 
 export interface SheetShapeMapping {
@@ -99,10 +108,9 @@ export interface SheetShapeMapping {
    */
   readonly staffColumns: Readonly<Record<string, StaffSubColumns>>;
   /**
-   * Cell-text-lowercased → status enum, applied uniformly across staff
-   * for now. G6.15.2 will replace this with a per-staff map under
-   * `staffColumns[name].statusValueToEnumMap`; this field stays as the
-   * fallback default.
+   * Fallback cell-text → status enum, used when a staff's per-staff map
+   * doesn't have the value. The probe seeds this from
+   * `DEFAULT_STATUS_VALUE_MAP`; operators may extend on disk.
    */
   readonly statusValueToEnumMap: Readonly<Record<string, RosterStatus>>;
   /** ISO timestamp of the probe that wrote this mapping. */
@@ -158,7 +166,7 @@ export const DEFAULT_STATUS_VALUE_MAP: Readonly<Record<string, RosterStatus>> = 
   lv: 'leave',
   leave: 'leave',
   al: 'leave',
-  off: 'leave',
+  off: 'not-working',
   h: 'half-day',
   half: 'half-day',
   'half-day': 'half-day',
@@ -172,6 +180,47 @@ export const DEFAULT_STATUS_VALUE_MAP: Readonly<Record<string, RosterStatus>> = 
 });
 
 /**
+ * Per-staff statusValueToEnumMap defaults the probe seeds when it first
+ * encounters a known staff name (G6.15.2). Each staff has cell conventions
+ * the global default does not capture; the per-staff map takes precedence
+ * at cell-resolution time. Keys are lowercased, trimmed; the resolver MUST
+ * trim+lowercase the live cell text before lookup.
+ *
+ * Reference (per architect-backlog.md G6.15.2):
+ *   - Sally writes `Work` / `Pet` / `-` in her Day column. `Pet` means
+ *     pet-care leave-other (not formal Annual Leave); `-` means
+ *     not-working that day.
+ *   - Chloe writes `Full` / `Half` / `Off` and also fills numeric Day
+ *     Value / Night Value cells. The numeric fallback for Chloe's Day
+ *     column lives in the sync runner (`resolveStaffDayCell`), not here.
+ *
+ * Unknown staff names fall through to the global
+ * `DEFAULT_STATUS_VALUE_MAP` only (no per-staff override).
+ */
+export const STAFF_STATUS_DEFAULTS: Readonly<Record<string, Readonly<Record<string, RosterStatus>>>> = Object.freeze({
+  Sally: Object.freeze({
+    work: 'working',
+    pet: 'leave-other',
+    '-': 'not-working',
+    '': 'not-working',
+  }),
+  Chloe: Object.freeze({
+    full: 'working',
+    half: 'half-day',
+    off: 'not-working',
+    '-': 'not-working',
+    '': 'not-working',
+  }),
+});
+
+/** Look up a staff's seed defaults; returns undefined for unknown staff. */
+export function defaultStatusMapForStaff(
+  staffName: string,
+): Readonly<Record<string, RosterStatus>> | undefined {
+  return STAFF_STATUS_DEFAULTS[staffName.trim()];
+}
+
+/**
  * Render the mapping as a YAML string the operator can hand-edit on disk.
  *
  * Stable ordering: top-level keys appear in `version`, `headerHash`,
@@ -181,21 +230,30 @@ export const DEFAULT_STATUS_VALUE_MAP: Readonly<Record<string, RosterStatus>> = 
  * emitted in canonical `SUB_COLUMN_KEYS` order. The enum-map keys are
  * sorted for diff stability across re-probes.
  */
+function sortStatusMap(
+  m: Readonly<Record<string, RosterStatus>>,
+): Record<string, RosterStatus> {
+  const out: Record<string, RosterStatus> = {};
+  for (const k of Object.keys(m).sort()) {
+    out[k] = m[k]!;
+  }
+  return out;
+}
+
 export function renderMappingYaml(mapping: SheetShapeMapping): string {
-  const orderedStaffColumns: Record<string, Record<string, number>> = {};
+  const orderedStaffColumns: Record<string, Record<string, unknown>> = {};
   for (const [name, cols] of Object.entries(mapping.staffColumns)) {
-    const ordered: Record<string, number> = {};
+    const ordered: Record<string, unknown> = {};
     for (const key of SUB_COLUMN_KEYS) {
       const v = cols[key];
       if (typeof v === 'number') {
         ordered[key] = v;
       }
     }
+    if (cols.statusValueToEnumMap && Object.keys(cols.statusValueToEnumMap).length > 0) {
+      ordered.statusValueToEnumMap = sortStatusMap(cols.statusValueToEnumMap);
+    }
     orderedStaffColumns[name] = ordered;
-  }
-  const sortedStatusMap: Record<string, RosterStatus> = {};
-  for (const k of Object.keys(mapping.statusValueToEnumMap).sort()) {
-    sortedStatusMap[k] = mapping.statusValueToEnumMap[k]!;
   }
   return yaml.dump(
     {
@@ -203,7 +261,7 @@ export function renderMappingYaml(mapping: SheetShapeMapping): string {
       headerHash: mapping.headerHash,
       dateColumn: mapping.dateColumn,
       staffColumns: orderedStaffColumns,
-      statusValueToEnumMap: sortedStatusMap,
+      statusValueToEnumMap: sortStatusMap(mapping.statusValueToEnumMap),
       probedAt: mapping.probedAt,
     },
     { lineWidth: 120, sortKeys: false },
@@ -264,6 +322,7 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
     throw new SheetShapeMappingError('staffColumns must be a mapping', 'invalid_staff_columns');
   }
   const staffColumns: Record<string, StaffSubColumns> = {};
+  const enumSet = new Set<string>(ROSTER_STATUS_VALUES);
   for (const [name, rawCols] of Object.entries(r.staffColumns as Record<string, unknown>)) {
     if (!rawCols || typeof rawCols !== 'object' || Array.isArray(rawCols)) {
       throw new SheetShapeMappingError(
@@ -271,8 +330,28 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
         'invalid_staff_columns',
       );
     }
-    const cols: Record<string, number> = {};
+    const cols: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(rawCols as Record<string, unknown>)) {
+      if (k === 'statusValueToEnumMap') {
+        if (!v || typeof v !== 'object' || Array.isArray(v)) {
+          throw new SheetShapeMappingError(
+            `staffColumns["${name}"].statusValueToEnumMap must be a mapping`,
+            'invalid_staff_columns',
+          );
+        }
+        const perStaffMap: Record<string, RosterStatus> = {};
+        for (const [vk, vv] of Object.entries(v as Record<string, unknown>)) {
+          if (typeof vv !== 'string' || !enumSet.has(vv)) {
+            throw new SheetShapeMappingError(
+              `staffColumns["${name}"].statusValueToEnumMap["${vk}"] maps to invalid status: ${String(vv)}`,
+              'invalid_status_enum',
+            );
+          }
+          perStaffMap[vk] = vv as RosterStatus;
+        }
+        cols.statusValueToEnumMap = perStaffMap;
+        continue;
+      }
       if (!(SUB_COLUMN_KEYS as readonly string[]).includes(k)) {
         throw new SheetShapeMappingError(
           `staffColumns["${name}"] has unknown sub-column key: ${k}`,
@@ -287,7 +366,8 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
       }
       cols[k] = v;
     }
-    if (Object.keys(cols).length === 0) {
+    const numericKeysCount = Object.keys(cols).filter((k) => k !== 'statusValueToEnumMap').length;
+    if (numericKeysCount === 0) {
       throw new SheetShapeMappingError(
         `staffColumns["${name}"] must have at least one sub-column`,
         'invalid_staff_columns',
@@ -304,7 +384,6 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
   if (!r.statusValueToEnumMap || typeof r.statusValueToEnumMap !== 'object') {
     throw new SheetShapeMappingError('statusValueToEnumMap must be a mapping', 'missing_field');
   }
-  const enumSet = new Set<string>(ROSTER_STATUS_VALUES);
   const enumMap: Record<string, RosterStatus> = {};
   for (const [k, v] of Object.entries(r.statusValueToEnumMap as Record<string, unknown>)) {
     if (typeof v !== 'string' || !enumSet.has(v)) {

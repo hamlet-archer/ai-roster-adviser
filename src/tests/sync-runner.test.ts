@@ -21,6 +21,7 @@ import {
 } from '../sheet-shape-mapping.js';
 import {
   resolveCell,
+  resolveStaffDayCell,
   ROSTER_DEFAULT_HOURS_HALF_DAY,
   ROSTER_DEFAULT_HOURS_WORKING,
   hoursForStatus,
@@ -106,6 +107,235 @@ describe('hoursForStatus', () => {
     expect(hoursForStatus('sick')).toBeNull();
     expect(hoursForStatus('public-holiday')).toBeNull();
     expect(hoursForStatus('unknown')).toBeNull();
+  });
+});
+
+describe('resolveStaffDayCell — G6.15.2 priority rules', () => {
+  // Build a fixture mapping with both Sally + Chloe, including
+  // per-staff statusValueToEnumMap + the full StaffSubColumns shape.
+  function staffMapping(): SheetShapeMapping {
+    const row1 = ['', '', '', 'Sally', '', '', 'Chloe', '', '', '', '', '', ''];
+    const row2 = [
+      'Date',
+      'DOW',
+      '',
+      'Day',
+      'Night',
+      'Remarks',
+      'Day',
+      'Night',
+      'Day Value',
+      'Night Value',
+      'Overtime',
+      'Annual Leave',
+      'Remarks',
+    ];
+    return {
+      version: SHEET_MAPPING_SCHEMA_VERSION,
+      headerHash: hashHeaderRows(row1, row2),
+      dateColumn: 0,
+      staffColumns: {
+        Sally: {
+          day: 3,
+          night: 4,
+          remarks: 5,
+          statusValueToEnumMap: {
+            work: 'working',
+            pet: 'leave-other',
+            '-': 'not-working',
+            '': 'not-working',
+          },
+        },
+        Chloe: {
+          day: 6,
+          night: 7,
+          dayValue: 8,
+          nightValue: 9,
+          overtime: 10,
+          annualLeave: 11,
+          remarks: 12,
+          statusValueToEnumMap: {
+            full: 'working',
+            half: 'half-day',
+            off: 'not-working',
+            '-': 'not-working',
+            '': 'not-working',
+          },
+        },
+      },
+      statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },
+      probedAt: '2026-05-21T19:11:05Z',
+    };
+  }
+
+  it('Sally Work → working (per-staff map)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Sally', dayCell: 'Work' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('working');
+    expect(r.hours).toBe(ROSTER_DEFAULT_HOURS_WORKING);
+    expect(r.unknownText).toBe(false);
+  });
+
+  it('Sally Pet → leave-other (per-staff override of global "pet" lookup)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Sally', dayCell: 'Pet' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('leave-other');
+    expect(r.hours).toBeNull();
+  });
+
+  it('Sally - → not-working', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Sally', dayCell: '-' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('not-working');
+    expect(r.hours).toBeNull();
+  });
+
+  it('Sally empty cell → not-working (per-staff empty-string default)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Sally', dayCell: '' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('not-working');
+  });
+
+  it('Chloe Full → working', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Full' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('working');
+    expect(r.hours).toBe(ROSTER_DEFAULT_HOURS_WORKING);
+  });
+
+  it('Chloe Half → half-day', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Half' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('half-day');
+    expect(r.hours).toBe(ROSTER_DEFAULT_HOURS_HALF_DAY);
+  });
+
+  it('Chloe Off → not-working', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Off' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('not-working');
+  });
+
+  it('Chloe numeric Day > 0 → working (numeric fallback rule)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 1 },
+      staffMapping(),
+    );
+    expect(r.status).toBe('working');
+    expect(r.hours).toBe(ROSTER_DEFAULT_HOURS_WORKING);
+  });
+
+  it('Chloe numeric Day === 0 → not-working', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 0 },
+      staffMapping(),
+    );
+    expect(r.status).toBe('not-working');
+    expect(r.hours).toBeNull();
+  });
+
+  it('Annual Leave > 0 → leave (override beats Day cell)', () => {
+    // Chloe's Day says "Full" → working, but Annual Leave is 1 → override.
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: 1 },
+      staffMapping(),
+    );
+    expect(r.status).toBe('leave');
+    expect(r.hours).toBeNull();
+  });
+
+  it('Annual Leave 0 does NOT trigger leave override (false-zero rule)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: 0 },
+      staffMapping(),
+    );
+    expect(r.status).toBe('working');
+  });
+
+  it('Annual Leave numeric string (e.g. "5.1") still triggers leave', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Off', annualLeaveCell: '5.1' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('leave');
+  });
+
+  it('Annual Leave "-" does NOT trigger leave (sentinel "no leave")', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'Full', annualLeaveCell: '-' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('working');
+  });
+
+  it('privacy: /sick/i in Day cell → sick (privacy filter beats all other rules)', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Chloe', dayCell: 'sick', annualLeaveCell: 1 },
+      staffMapping(),
+    );
+    expect(r.status).toBe('sick');
+    expect(r.hours).toBeNull();
+    expect(r.sickCollapsed).toBe(true);
+  });
+
+  it('privacy: /sick/i in Remarks cell also triggers sick (heuristic)', () => {
+    const r = resolveStaffDayCell(
+      {
+        staffName: 'Sally',
+        dayCell: 'Work',
+        remarksCell: 'feeling sicker today',
+      },
+      staffMapping(),
+    );
+    expect(r.status).toBe('sick');
+    expect(r.sickCollapsed).toBe(true);
+  });
+
+  it('unknown staff falls back to the global statusValueToEnumMap', () => {
+    const m = staffMapping();
+    // Add an unknown staff with no per-staff map; "W" matches the global default.
+    const m2: SheetShapeMapping = {
+      ...m,
+      staffColumns: {
+        ...m.staffColumns,
+        Unknown: { day: 99 }, // no statusValueToEnumMap
+      },
+    };
+    const r = resolveStaffDayCell({ staffName: 'Unknown', dayCell: 'W' }, m2);
+    expect(r.status).toBe('working');
+  });
+
+  it('unknown Day text (no per-staff hit, no global hit) → unknown + unknownText:true', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'Sally', dayCell: 'Yetanotherthing' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('unknown');
+    expect(r.unknownText).toBe(true);
+    expect(r.hours).toBeNull();
+  });
+
+  it('completely-unknown staff with completely-unknown text → unknown', () => {
+    const r = resolveStaffDayCell(
+      { staffName: 'NeverSeenBefore', dayCell: 'wibble' },
+      staffMapping(),
+    );
+    expect(r.status).toBe('unknown');
+    expect(r.unknownText).toBe(true);
   });
 });
 

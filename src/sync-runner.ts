@@ -32,7 +32,7 @@
 import type { RosterCache } from './cache.js';
 import type { RosterStatus } from './cache.js';
 import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
-import type { SheetShapeMapping } from './sheet-shape-mapping.js';
+import type { SheetShapeMapping, StaffSubColumns } from './sheet-shape-mapping.js';
 
 // PATCH-EXPIRY: 2026-08-13 owner=roster-adviser reason=https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (roster-adviser sub-item 3 magic-number register)
 export const ROSTER_SYNC_LOOKBACK_DAYS = 30;
@@ -130,12 +130,134 @@ export function hoursForStatus(s: RosterStatus): number | null {
     case 'half-day':
       return ROSTER_DEFAULT_HOURS_HALF_DAY;
     case 'leave':
+    case 'leave-other':
     case 'sick':
     case 'public-holiday':
+    case 'not-working':
     case 'unknown':
     default:
       return null;
   }
+}
+
+/**
+ * Inputs to `resolveStaffDayCell` — the per-(person, date) row state that
+ * the resolver needs to decide a status. G6.15.3 will assemble these from
+ * the value grid; G6.15.2 ships the resolver itself.
+ */
+export interface StaffDayCellInput {
+  /** Staff name (row-1 label) — used to look up the per-staff map. */
+  readonly staffName: string;
+  /** The cell at `staffColumns[name].day` for this row. */
+  readonly dayCell: string | number | boolean | null;
+  /** The cell at `staffColumns[name].annualLeave` for this row (or null
+   *  if the staff has no annualLeave sub-column). */
+  readonly annualLeaveCell?: string | number | boolean | null;
+  /** The cell at `staffColumns[name].remarks` for this row (or null if
+   *  the staff has no remarks sub-column). Used for the `/sick/i`
+   *  privacy filter heuristic. */
+  readonly remarksCell?: string | number | boolean | null;
+}
+
+/**
+ * Resolve one (staff, date) row's status, applying the G6.15.2 rule
+ * priority. Returns the same `CellResolution` shape as `resolveCell` so
+ * G6.15.3 can route per-cell outcomes uniformly.
+ *
+ * Priority order (highest first):
+ *
+ *   1. **Privacy collapse** — if either `dayCell` or `remarksCell`
+ *      contains `/sick/i`, the row is `sick`, hours `null`. No further
+ *      detail is returned (privacy invariant per
+ *      `project_roster_semantics`).
+ *   2. **Annual Leave override** — if the staff has an `annualLeave`
+ *      column AND its cell is a number > 0, the row is `leave` regardless
+ *      of what the Day cell says. The W&L sheet's Annual Leave column is
+ *      the formal leave signal.
+ *   3. **Per-staff statusValueToEnumMap** — lowercased + trimmed Day cell
+ *      text is looked up against `staffColumns[name].statusValueToEnumMap`
+ *      first.
+ *   4. **Global fallback map** — if no per-staff hit, the lookup falls
+ *      back to `mapping.statusValueToEnumMap`.
+ *   5. **Numeric Day cell** — if the Day cell is a number (Chloe's
+ *      convention), `> 0 → working`, `0 → not-working`. This fires only
+ *      when neither per-staff nor global lookups had a hit.
+ *   6. **Unknown** — empty cell → `unknown` + `unknownText: false`; any
+ *      other unrecognised text → `unknown` + `unknownText: true`.
+ */
+export function resolveStaffDayCell(
+  input: StaffDayCellInput,
+  mapping: SheetShapeMapping,
+): CellResolution {
+  const staff = mapping.staffColumns[input.staffName] as StaffSubColumns | undefined;
+  const dayText =
+    input.dayCell === null || input.dayCell === undefined ? '' : String(input.dayCell);
+  const remarksText =
+    input.remarksCell === null || input.remarksCell === undefined ? '' : String(input.remarksCell);
+
+  // 1. Privacy collapse — runs against both Day and Remarks cell text.
+  if (/sick/i.test(dayText) || /sick/i.test(remarksText)) {
+    return { status: 'sick', hours: null, sickCollapsed: true, unknownText: false };
+  }
+
+  // 2. Annual Leave override — formal leave signal beats per-staff map.
+  if (staff?.annualLeave !== undefined && input.annualLeaveCell !== undefined) {
+    const al = input.annualLeaveCell;
+    if (typeof al === 'number' && Number.isFinite(al) && al > 0) {
+      return { status: 'leave', hours: null, sickCollapsed: false, unknownText: false };
+    }
+    if (typeof al === 'string' && al.trim() !== '' && al.trim() !== '-') {
+      const n = Number(al);
+      if (Number.isFinite(n) && n > 0) {
+        return { status: 'leave', hours: null, sickCollapsed: false, unknownText: false };
+      }
+    }
+  }
+
+  // 3-4. Lookup precedence: per-staff map → global fallback.
+  const key = dayText.trim().toLowerCase();
+  const perStaffHit = staff?.statusValueToEnumMap?.[key];
+  if (perStaffHit) {
+    return {
+      status: perStaffHit,
+      hours: hoursForStatus(perStaffHit),
+      sickCollapsed: false,
+      unknownText: false,
+    };
+  }
+  const globalHit = mapping.statusValueToEnumMap[key];
+  if (globalHit) {
+    return {
+      status: globalHit,
+      hours: hoursForStatus(globalHit),
+      sickCollapsed: false,
+      unknownText: false,
+    };
+  }
+
+  // 5. Numeric Day cell — Chloe's `Day Value` convention is numeric hours.
+  if (typeof input.dayCell === 'number' && Number.isFinite(input.dayCell)) {
+    if (input.dayCell > 0) {
+      return {
+        status: 'working',
+        hours: hoursForStatus('working'),
+        sickCollapsed: false,
+        unknownText: false,
+      };
+    }
+    return {
+      status: 'not-working',
+      hours: null,
+      sickCollapsed: false,
+      unknownText: false,
+    };
+  }
+
+  // 6. Unknown.
+  if (dayText === '') {
+    return { status: 'unknown', hours: null, sickCollapsed: false, unknownText: false };
+  }
+  return { status: 'unknown', hours: null, sickCollapsed: false, unknownText: true };
 }
 
 /**
