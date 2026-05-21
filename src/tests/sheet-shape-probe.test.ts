@@ -90,8 +90,9 @@ describe('probeSheetShape — happy path', () => {
     });
     expect(mapping.version).toBe(SHEET_MAPPING_SCHEMA_VERSION);
     expect(mapping.dateColumn).toBe(0);
-    // G6.15.2: known staff (Sally / Chloe) carry seeded
-    // statusValueToEnumMap defaults; sub-column indices are unchanged.
+    // G6.15.2 (rewritten 2026-05-21 in G6.15.5 follow-up): Sally and Chloe
+    // share the same Day-cell convention in the live W&L sheet — Full /
+    // Half / Off — so both seed defaults map identically.
     expect(mapping.staffColumns.Sally).toMatchObject({ day: 3, night: 4, remarks: 5 });
     expect(mapping.staffColumns.Chloe).toMatchObject({
       day: 6,
@@ -102,8 +103,9 @@ describe('probeSheetShape — happy path', () => {
       annualLeave: 11,
       remarks: 12,
     });
-    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.work).toBe('working');
-    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.pet).toBe('leave-other');
+    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.full).toBe('working');
+    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.half).toBe('half-day');
+    expect(mapping.staffColumns.Sally?.statusValueToEnumMap?.off).toBe('not-working');
     expect(mapping.staffColumns.Chloe?.statusValueToEnumMap?.full).toBe('working');
     expect(mapping.staffColumns.Chloe?.statusValueToEnumMap?.half).toBe('half-day');
     expect(mapping.headerHash).toBe(hashHeaderRows(ROW1, ROW2));
