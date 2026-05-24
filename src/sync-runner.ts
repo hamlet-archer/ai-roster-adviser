@@ -45,6 +45,8 @@ export interface SyncCycleDeps {
   readonly sheetId: string;
   /** A1 range covering the full sheet tab (e.g. `Roster!A1:ZZ`). */
   readonly sheetRange: string;
+  /** UUIDv7 trace ID for this cycle, generated at the entry point. */
+  readonly traceId: string;
   /** Clock seam for deterministic timestamps in tests. */
   readonly now?: () => Date;
 }
@@ -67,6 +69,7 @@ export interface PerCellOutcome {
 }
 
 export interface SyncCycleReport {
+  readonly traceId: string;
   readonly startedAtIso: string;
   readonly endedAtIso: string;
   readonly status:
@@ -286,6 +289,7 @@ export function resolveStaffDayCell(
 export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport> {
   const now = (deps.now ?? (() => new Date()))();
   const startedAtIso = now.toISOString();
+  const traceId = deps.traceId;
 
   let values: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   try {
@@ -296,6 +300,7 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
     values = res.values;
   } catch (err) {
     return {
+      traceId,
       startedAtIso,
       endedAtIso: new Date().toISOString(),
       status: 'sheet_error',
@@ -308,6 +313,7 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
   }
   if (values.length < 2) {
     return {
+      traceId,
       startedAtIso,
       endedAtIso: new Date().toISOString(),
       status: 'sheet_error',
@@ -322,6 +328,7 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
   const liveHash = hashHeaderRows(values[0] ?? [], values[1] ?? []);
   if (liveHash !== deps.mapping.headerHash) {
     return {
+      traceId,
       startedAtIso,
       endedAtIso: new Date().toISOString(),
       status: 'header_hash_mismatch',
@@ -445,6 +452,7 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
   deps.cache.setSyncState(ROSTER_SYNC_SOURCE, deps.mapping.headerHash, startedAtIso);
 
   return {
+    traceId,
     startedAtIso,
     endedAtIso: new Date().toISOString(),
     status: 'ok',
@@ -466,6 +474,7 @@ export function renderSyncSummary(report: SyncCycleReport): string {
     service: 'ai-roster-adviser',
     phase: 'sync',
     msg: 'sync_cycle_complete',
+    trace_id: report.traceId,
     started_at: report.startedAtIso,
     ended_at: report.endedAtIso,
     status: report.status,
