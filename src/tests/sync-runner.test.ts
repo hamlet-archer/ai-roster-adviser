@@ -31,6 +31,7 @@ import {
 } from '../sheet-shape-mapping.js';
 import {
   hoursForStatus,
+  renderSyncSummary,
   resolveCell,
   resolveStaffDayCell,
   ROSTER_DEFAULT_HOURS_HALF_DAY,
@@ -365,6 +366,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     // 2 dates × 2 staff = 4 upserts.
@@ -390,6 +392,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     // Carried Forward row skipped silently; only 2 upserts (1 date × 2 staff).
@@ -411,6 +414,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     const chloe = cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' });
@@ -433,6 +437,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     const sally = cache.getEntry({ person: 'Sally', dateIso: '2025-11-10' });
@@ -456,6 +461,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     const sally = cache.getEntry({ person: 'Sally', dateIso: '2025-11-10' });
@@ -486,6 +492,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('header_hash_mismatch');
     expect(report.cellsUpserted).toBe(0);
@@ -503,6 +510,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('sheet_error');
     expect(report.errorMessage).toMatch(/rate-limited/);
@@ -517,6 +525,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('sheet_error');
     expect(report.errorMessage).toMatch(/at least 2 header rows/);
@@ -535,6 +544,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(report.status).toBe('ok');
     const unknown = report.perCellOutcomes.find((o) => o.reason === 'unknown_text');
@@ -558,6 +568,7 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     const after = cache.getSyncState(ROSTER_SYNC_SOURCE);
     expect(after?.headerHash).toBe(mapping.headerHash);
@@ -581,7 +592,49 @@ describe('runSyncCycle — happy path + grid iteration', () => {
       mapping,
       sheetId: 'test',
       sheetRange: 'A1:ZZ',
+      traceId: '01900000-0000-7000-8000-000000000001',
     });
     expect(cache.getSyncState(ROSTER_SYNC_SOURCE)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// renderSyncSummary — trace_id propagation (observability audit 2026-05-24)
+// ---------------------------------------------------------------------------
+
+describe('renderSyncSummary — trace_id field', () => {
+  it('includes trace_id in the JSON output matching the report', () => {
+    const traceId = '01900000-0000-7000-8000-000000000002';
+    const summary = renderSyncSummary({
+      traceId,
+      startedAtIso: '2026-05-24T00:00:00.000Z',
+      endedAtIso: '2026-05-24T00:00:01.000Z',
+      status: 'ok',
+      headerHashOk: true,
+      cellsUpserted: 10,
+      cellsSkipped: 2,
+      perCellOutcomes: [],
+    });
+    const parsed = JSON.parse(summary) as Record<string, unknown>;
+    expect(parsed.trace_id).toBe(traceId);
+    expect(parsed.msg).toBe('sync_cycle_complete');
+  });
+
+  it('includes trace_id even on error status', () => {
+    const traceId = '01900000-0000-7000-8000-000000000003';
+    const summary = renderSyncSummary({
+      traceId,
+      startedAtIso: '2026-05-24T00:00:00.000Z',
+      endedAtIso: '2026-05-24T00:00:01.000Z',
+      status: 'sheet_error',
+      headerHashOk: false,
+      cellsUpserted: 0,
+      cellsSkipped: 0,
+      perCellOutcomes: [],
+      errorMessage: 'rate-limited',
+    });
+    const parsed = JSON.parse(summary) as Record<string, unknown>;
+    expect(parsed.trace_id).toBe(traceId);
+    expect(parsed.level).toBe('error');
   });
 });

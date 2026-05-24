@@ -16,6 +16,7 @@
  * of "last sync OK vs not".
  */
 
+import { v7 as uuidv7 } from 'uuid';
 import { RosterCache } from '../cache.js';
 import { BootCheckError, renderDiagnostic, runBootCheck } from '../boot-check.js';
 import { renderSyncSummary, runSyncCycle } from '../sync-runner.js';
@@ -51,6 +52,17 @@ async function main(): Promise<number> {
   // The full-sheet sync uses a wider range than the boot-check header probe
   // — A1:ZZ covers every data row a sane roster will ever have.
   const sheetRange = process.env.ROSTER_SHEET_FULL_RANGE ?? DEFAULT_FULL_SHEET_RANGE;
+  const traceId = uuidv7();
+  // eslint-disable-next-line no-console
+  console.log(
+    JSON.stringify({
+      level: 'info',
+      service: 'ai-roster-adviser',
+      phase: 'sync',
+      msg: 'sync_cycle_start',
+      trace_id: traceId,
+    }),
+  );
   const cache = new RosterCache({ path: dbPath });
   try {
     const report = await runSyncCycle({
@@ -59,6 +71,7 @@ async function main(): Promise<number> {
       mapping,
       sheetId,
       sheetRange,
+      traceId,
     });
     // eslint-disable-next-line no-console
     console.log(renderSyncSummary(report));
