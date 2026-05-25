@@ -24,7 +24,7 @@ STABLE_PATH="${STABLE_PATH:-/opt/ai-roster-adviser-deploy/pull-deploy.sh}"
 
 # systemd ProtectHome=read-only hides ~/.ssh — match the deploy.sh
 # pattern and point at the staged key + known_hosts under /etc.
-export GIT_SSH_COMMAND="ssh -i /etc/ai-roster-adviser-deploy/ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/ai-roster-adviser-deploy/ssh/known_hosts -o StrictHostKeyChecking=yes"
+export GIT_SSH_COMMAND="ssh -i /etc/ai-roster-adviser-deploy/ssh/key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/ai-roster-adviser-deploy/ssh/known_hosts -o StrictHostKeyChecking=yes -o HostName=ssh.github.com -p 443"
 
 cd "$REPO_DIR"
 
