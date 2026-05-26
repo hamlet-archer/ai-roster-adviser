@@ -48,3 +48,41 @@ echo "HEAD differs (${LOCAL:0:7} → ${REMOTE:0:7}); delegating to ${DEPLOY_SCRI
 if [[ -f "$REPO_DIR/scripts/pull-deploy.sh" ]] && [[ "$(realpath "$0")" == "$STABLE_PATH" ]]; then
   install -m 755 "$REPO_DIR/scripts/pull-deploy.sh" "$STABLE_PATH"
 fi
+
+# B8.10.4 — post-daemon-reload systemd-unit drift check. Mirrors the
+# B8.10.3 block in ai-calendar-adviser/scripts/pull-deploy.sh: deploy.sh
+# lives at /opt/ai-roster-adviser-deploy/deploy.sh on the VPS, not in
+# this repo, so the drift check cannot ride inside the daemon-reload
+# subshell the way ai-comms-adviser's does. The puller is the closest
+# in-repo hook point after deploy.sh's daemon-reload.
+#
+# Only fires if we got here (deploy.sh succeeded — set -e would have
+# killed the script otherwise). For each unit just synced, diff
+# `systemctl cat <unit>` (with the `# /etc/systemd/system/<unit>`
+# header stripped via tail -n +2) against the in-repo
+# deploy/systemd/<unit>. Any drift logs the unit name + unified diff to
+# stderr and exits 1 — the puller's systemd unit Result=exit-code
+# propagates and the dashboard /health page flips ai-roster-adviser red
+# within one heartbeat.
+#
+# Catches: (a) manual edits to /etc/systemd/system that bypassed
+# deploy.sh's unit-file sync, (b) a future regression of that sync,
+# (c) drop-in files under /etc/systemd/system/<unit>.d/ that change
+# effective unit text.
+drift_ok=1
+shopt -s nullglob
+for unit_path in "$REPO_DIR"/deploy/systemd/*.service "$REPO_DIR"/deploy/systemd/*.timer; do
+  unit_name=$(basename "$unit_path")
+  diff_tmp=$(mktemp)
+  if ! diff -u <(systemctl cat "$unit_name" 2>/dev/null | tail -n +2) "$unit_path" > "$diff_tmp" 2>&1; then
+    echo "drift: $unit_name differs between systemctl-cat and $unit_path" >&2
+    cat "$diff_tmp" >&2
+    drift_ok=
+  fi
+  rm -f "$diff_tmp"
+done
+shopt -u nullglob
+if [[ -z "${drift_ok:-}" ]]; then
+  echo "B8.10.4 drift check FAILED — running systemd unit text differs from in-repo deploy/systemd/" >&2
+  exit 1
+fi
