@@ -1,0 +1,78 @@
+name: check-deploy-guard
+
+# B8.4 (AP-8) — structural CI guard that fails any PR which removes
+# scripts/pull-deploy.sh's load-bearing invariants.
+#
+# ai-roster-adviser uses split deploy (same shape as ai-calendar-adviser):
+# pull-deploy.sh ships in this repo (self-installed onto the VPS at
+# /opt/ai-roster-adviser-deploy/pull-deploy.sh), but the heavy-lifting
+# deploy script (/opt/ai-roster-adviser-deploy/deploy.sh) lives out-of-
+# band on the VPS and is NOT version-controlled here. So B8.4 cannot
+# mirror B8.2's "grep scripts/deploy.sh for git reset" guard verbatim;
+# the actual reset happens in a file that isn't in this repo to check.
+#
+# What CAN be guarded is the puller's contribution to the deploy
+# contract — three structural invariants whose silent removal would
+# turn pull-deploy back into a silent-failure surface:
+#
+#   1. `set -euo pipefail` — fail-loud bash mode. Without this, an
+#      intermediate command failing mid-tick (git fetch, install,
+#      deploy.sh invocation) gets swallowed and the puller keeps
+#      running on stale state.
+#   2. Self-install via `install -m 755 ... "$STABLE_PATH"`. Without
+#      this, the stable puller copy on the VPS never updates and any
+#      pull-deploy.sh-side fix can't ship to production.
+#   3. `"$DEPLOY_SCRIPT"` invocation. Without this, the puller does
+#      nothing — fetches HEAD, notices it changed, and never delegates
+#      to the actual deploy machinery.
+#
+# Same blast-radius semantics as B8.1 / B8.2 / B8.3 (deployed code MUST
+# match a committed HEAD on origin/main + every layer of the deploy
+# chain fail-loud on error); same mechanical shape as B8.3 because
+# ai-roster-adviser and ai-calendar-adviser have parallel deploy models.
+#
+# Reading: https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md#b8
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/pull-deploy.sh'
+      - '.github/workflows/check-deploy-guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/pull-deploy.sh'
+      - '.github/workflows/check-deploy-guard.yml'
+
+jobs:
+  no-silent-puller-failure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify scripts/pull-deploy.sh exists
+        run: |
+          test -f scripts/pull-deploy.sh || {
+            echo "::error::scripts/pull-deploy.sh missing — B8.4 (AP-8) requires the in-repo puller"
+            exit 1
+          }
+
+      - name: Verify scripts/pull-deploy.sh fails loud + self-installs + invokes deploy.sh
+        run: |
+          if ! grep -qE 'set -euo pipefail' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.4 (AP-8) guard removed — pull-deploy.sh no longer enables 'set -euo pipefail'"
+            echo "  rationale: without fail-loud bash, intermediate failures (git fetch, install, deploy.sh invocation) get swallowed and the puller keeps running on stale state."
+            echo "  see: https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md#b8"
+            exit 1
+          fi
+          if ! grep -qE 'install -m 755 .* "\$STABLE_PATH"' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.4 (AP-8) guard removed — pull-deploy.sh no longer self-installs the stable copy via 'install -m 755 ... \"\$STABLE_PATH\"'"
+            echo "  rationale: without it, the stable puller copy on the VPS never updates and any pull-deploy.sh-side fix can't ship to production."
+            exit 1
+          fi
+          if ! grep -qE '"\$DEPLOY_SCRIPT"' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.4 (AP-8) guard removed — pull-deploy.sh no longer invokes \"\$DEPLOY_SCRIPT\""
+            echo "  rationale: without this, the puller fetches HEAD and notices it changed but never delegates to the actual deploy machinery."
+            exit 1
+          fi
+          echo "B8.4 guard verified: scripts/pull-deploy.sh sets -euo pipefail + self-installs via install -m 755 + invokes \$DEPLOY_SCRIPT."
