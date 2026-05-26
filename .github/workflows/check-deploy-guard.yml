@@ -76,3 +76,29 @@ jobs:
             exit 1
           fi
           echo "B8.4 guard verified: scripts/pull-deploy.sh sets -euo pipefail + self-installs via install -m 755 + invokes \$DEPLOY_SCRIPT."
+
+      - name: Verify scripts/pull-deploy.sh has the B8.10.4 post-daemon-reload drift check
+        # B8.10.4 — pins the post-daemon-reload drift check against silent
+        # removal. The check lives in pull-deploy.sh (not scripts/deploy.sh
+        # like in ai-comms-adviser) because ai-roster-adviser's deploy.sh
+        # is a VPS-side artifact not tracked in this repo. Greps for the
+        # structural signatures: systemctl cat (source of truth for running
+        # unit text), tail -n +2 (header strip), and a FAILED exit-1 path.
+        run: |
+          if ! grep -qE 'systemctl cat' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.10.4 guard removed — drift check no longer uses 'systemctl cat'"
+            echo "  rationale: the running systemd view is the source of truth for the post-daemon-reload comparison."
+            echo "  see: https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md#b8104"
+            exit 1
+          fi
+          if ! grep -qE 'tail -n \+2' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.10.4 guard removed — drift check no longer strips the systemctl-cat header"
+            echo "  rationale: without the header strip every unit appears drifted."
+            exit 1
+          fi
+          if ! grep -qiE 'drift.*FAILED|drift_ok|drift check' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::B8.10.4 guard removed — drift check has no FAILED exit-1 path"
+            echo "  rationale: the check must surface drift via exit 1, not just log a warning."
+            exit 1
+          fi
+          echo "B8.10.4 guard verified: scripts/pull-deploy.sh runs the post-daemon-reload drift check."
