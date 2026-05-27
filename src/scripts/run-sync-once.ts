@@ -20,10 +20,58 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { BootCheckError, renderDiagnostic, runBootCheck } from '../boot-check.js';
 import { RosterCache } from '../cache.js';
+import {
+  type OneshotFailLoudDeps,
+  type OneshotOutcome,
+  recordOneshotOutcome,
+} from '../oneshot-fail-loud.js';
 import { renderSyncSummary, runSyncCycle } from '../sync-runner.js';
 
 const DEFAULT_DB_PATH = '/var/lib/ai-roster-adviser/roster.db';
 const DEFAULT_FULL_SHEET_RANGE = 'A1:ZZ';
+const RECOVERY_COMMAND =
+  'npx -y tsx ~/Repo/ai-roster-adviser/src/scripts/bootstrap-oauth.ts  # then scp the resulting file to golden-ai-ops:/etc/ai-roster-adviser/oauth-token.json (mode 0600)';
+
+function failLoudDeps(): OneshotFailLoudDeps {
+  return {
+    statePath: process.env.ONESHOT_FAIL_LOUD_STATE_PATH,
+    slackBotToken: process.env.SLACK_BOT_TOKEN,
+    slackChannel: process.env.SLACK_CHANNEL_AI_OPS,
+    recoveryCommand: RECOVERY_COMMAND,
+    serviceId: 'ai-roster-adviser-sync',
+  };
+}
+
+async function reportToFailLoud(outcome: OneshotOutcome): Promise<void> {
+  try {
+    const result = await recordOneshotOutcome(outcome, failLoudDeps());
+    // Always emit a structured journald line so the stability-runner can grep
+    // for "oneshot_fail_loud" if needed; never fail the parent oneshot on
+    // observability errors.
+    console.log(
+      JSON.stringify({
+        level: result.posted ? 'warn' : 'info',
+        service: 'ai-roster-adviser',
+        phase: 'sync',
+        msg: 'oneshot_fail_loud',
+        outcome: outcome.kind,
+        posted: result.posted,
+        reason: result.reason,
+        consecutive_failures: result.state.consecutiveFailures,
+      }),
+    );
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        level: 'warn',
+        service: 'ai-roster-adviser',
+        phase: 'sync',
+        msg: 'oneshot_fail_loud_error',
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+}
 
 async function main(): Promise<number> {
   let bootResult: Awaited<ReturnType<typeof runBootCheck>>;
@@ -32,6 +80,11 @@ async function main(): Promise<number> {
   } catch (err) {
     if (err instanceof BootCheckError) {
       console.error(renderDiagnostic(err.diagnostic));
+      await reportToFailLoud({
+        kind: 'failure',
+        reason: `boot-check ${err.diagnostic.step}: ${err.diagnostic.upstream_error}`,
+        rankedCauses: err.diagnostic.ranked_causes,
+      });
       return 1;
     }
 
@@ -44,6 +97,10 @@ async function main(): Promise<number> {
         error: err instanceof Error ? err.message : String(err),
       }),
     );
+    await reportToFailLoud({
+      kind: 'failure',
+      reason: `boot-check unhandled: ${err instanceof Error ? err.message : String(err)}`,
+    });
     return 2;
   }
   const { adapter, mapping, sheetId } = bootResult;
@@ -75,7 +132,15 @@ async function main(): Promise<number> {
     });
 
     console.log(renderSyncSummary(report));
-    return report.status === 'ok' ? 0 : 1;
+    if (report.status === 'ok') {
+      await reportToFailLoud({ kind: 'success' });
+      return 0;
+    }
+    await reportToFailLoud({
+      kind: 'failure',
+      reason: `sync ${report.status}: ${report.errorMessage ?? 'unknown'}`,
+    });
+    return 1;
   } finally {
     cache.close();
   }
