@@ -1,0 +1,33 @@
+[Unit]
+Description=ai-roster-adviser: pull main + redeploy if HEAD changed
+Documentation=https://github.com/hamlet-archer/ai-roster-adviser
+After=network-online.target ai-roster-adviser.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+ExecStart=/opt/ai-roster-adviser-deploy/pull-deploy.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-roster-adviser-pull-deploy
+TimeoutStartSec=600
+
+# Hardening. NoNewPrivileges intentionally NOT set — pull-deploy needs
+# `sudo systemctl restart …` for the ai-roster-adviser daemon + sync
+# timer. ProtectHome relaxed to read-only so git can read the staged
+# deploy key + known_hosts (matches the ai-calendar-adviser pull-deploy
+# pattern, which itself patterns ai-chief-pull-deploy + ai-comms-adviser).
+ProtectSystem=full
+# Carve a write hole for /etc/systemd/system so deploy.sh's `cp` of
+# updated unit files succeeds — without this, ProtectSystem=full made
+# the cp fail with EROFS after the script had already stopped the
+# services (the ai-comms-adviser outage on 2026-05-10 17:31 UTC
+# documents this exact failure mode).
+ReadWritePaths=/etc/systemd/system
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

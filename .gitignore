@@ -12,3 +12,7 @@ coverage/
 oauth-token/
 oauth-token.json
 .local/
+
+# Cross-family auditor output (codex-audit) — local per machine
+.claude/audits/*
+!.claude/audits/README.md
