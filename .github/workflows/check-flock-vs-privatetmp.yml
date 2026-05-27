@@ -1,0 +1,132 @@
+name: check-flock-vs-privatetmp
+
+# R2 — TEMPLATE for the per-repo CI workflow that detects the
+# `flock /tmp/<name>` + `PrivateTmp=true` anti-pattern. Copy this file
+# verbatim into `.github/workflows/check-flock-vs-privatetmp.yml` in any
+# agent repo with pull-deploy units and a deploy script.
+#
+# The anti-pattern: when a systemd `*.service` declares `PrivateTmp=true`
+# AND the script it invokes via `ExecStart=` holds `flock /tmp/<name>`,
+# each service acquires its OWN namespaced /tmp inode — the flock
+# provides no mutual exclusion between concurrent service instances.
+# The 2026-05-27 ai-chief incident lost 58 min of production time to
+# this exact race (two deploys raced, each acquired its private inode,
+# both stopped + restarted the daemon, the second restart's start step
+# never ran).
+#
+# What this workflow does:
+#   1. Greps tracked *.sh files under deploy/ + scripts/ for
+#      `flock\s+[^/]*/tmp/` (comment-stripped, so a `# flock /tmp/...`
+#      docstring doesn't trip the guard).
+#   2. Finds tracked *.service files that declare `PrivateTmp=true|yes`.
+#   3. For each matched script, checks whether any matched service has
+#      an `ExecStart=` line that references the script's basename.
+#   4. Fails with a named ::error if the intersection is non-empty.
+#
+# Reading:
+#   - hamlet-archer/ai-ops-meta — incidents/2026-05-27-ai-chief-pull-deploy-webhook-race-condition.md
+#   - hamlet-archer/ai-ops-meta — architect-backlog.md §R2
+#   - hamlet-archer/ai-ops-meta — audits/2026-05-27-fleet/r1-flock-tmp-audit.md
+#
+# How to install in a new agent repo:
+#   1. Copy this file:
+#        cp ~/Repo/ai-ops-meta/deploy/templates/check-flock-vs-privatetmp.yml \
+#           ~/Repo/<repo>/.github/workflows/check-flock-vs-privatetmp.yml
+#   2. Commit + open a PR — the workflow runs on push and pull_request.
+#
+# No allowlist mechanism: the existence of `flock /tmp/<name>` in a
+# script invoked by a PrivateTmp=true unit is the violation. There is
+# no "but it's documented" exemption — move the lock out of /tmp to a
+# `ReadWritePaths`-shared directory and the violation is gone. A
+# docstring that references the literal substring is fine because the
+# comment-strip in step 1 removes it before the grep.
+#
+# Bash portability: uses `while read` + temp files instead of `mapfile`
+# so the same script runs locally on macOS bash 3.2 for hermetic
+# smoke-testing. GitHub Actions ubuntu-latest carries bash 5; both work.
+
+on:
+  pull_request:
+    paths:
+      - 'deploy/**'
+      - 'scripts/**'
+      - '.github/workflows/check-flock-vs-privatetmp.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+      - 'scripts/**'
+      - '.github/workflows/check-flock-vs-privatetmp.yml'
+
+jobs:
+  check-flock-vs-privatetmp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Detect flock-on-/tmp inside PrivateTmp=true unit chain
+        run: |
+          set -euo pipefail
+
+          SCRIPTS_TMP=$(mktemp)
+          UNITS_TMP=$(mktemp)
+          VIOLATIONS_TMP=$(mktemp)
+          trap 'rm -f "$SCRIPTS_TMP" "$UNITS_TMP" "$VIOLATIONS_TMP"' EXIT
+
+          # 1) Find tracked *.sh files under deploy/ + scripts/ that hold
+          #    flock /tmp/<name> in non-comment lines.
+          git ls-files | grep -E '^(deploy/|scripts/).*\.sh$' | sort -u | \
+            while IFS= read -r f; do
+              [[ -z "$f" ]] && continue
+              if awk '{sub(/#.*/, ""); print}' "$f" 2>/dev/null \
+                  | grep -qE 'flock[[:space:]]+[^/]*/tmp/'; then
+                printf '%s\n' "$f"
+              fi
+            done > "$SCRIPTS_TMP"
+
+          if [[ ! -s "$SCRIPTS_TMP" ]]; then
+            echo "check-flock-vs-privatetmp: clean — no shell scripts hold flock /tmp/<name>"
+            exit 0
+          fi
+
+          # 2) Find tracked *.service files with PrivateTmp=true|yes.
+          git ls-files | grep -E '^deploy/.*\.service$' | sort -u | \
+            while IFS= read -r unit; do
+              [[ -z "$unit" ]] && continue
+              if grep -qiE '^[[:space:]]*PrivateTmp[[:space:]]*=[[:space:]]*(true|yes|on|1)[[:space:]]*(#.*)?$' "$unit"; then
+                printf '%s\n' "$unit"
+              fi
+            done > "$UNITS_TMP"
+
+          if [[ ! -s "$UNITS_TMP" ]]; then
+            echo "check-flock-vs-privatetmp: scripts hold flock /tmp/<name> but no PrivateTmp=true units exist — no anti-pattern"
+            while IFS= read -r s; do echo "  flock-bearing script: $s"; done < "$SCRIPTS_TMP"
+            exit 0
+          fi
+
+          # 3) Cross-reference: for each flock-bearing script, check whether
+          #    any PrivateTmp=true unit references its basename via ExecStart=.
+          while IFS= read -r script; do
+            [[ -z "$script" ]] && continue
+            base=$(basename "$script")
+            while IFS= read -r unit; do
+              [[ -z "$unit" ]] && continue
+              if grep -qE "^[[:space:]]*ExecStart=.*${base}" "$unit"; then
+                printf 'script=%s private_unit=%s\n' "$script" "$unit" >> "$VIOLATIONS_TMP"
+              fi
+            done < "$UNITS_TMP"
+          done < "$SCRIPTS_TMP"
+
+          if [[ ! -s "$VIOLATIONS_TMP" ]]; then
+            echo "check-flock-vs-privatetmp: clean — flock /tmp scripts are not invoked from any PrivateTmp=true unit"
+            exit 0
+          fi
+
+          echo "::error::flock on /tmp/<name> provides no mutual exclusion when the spawning systemd unit declares PrivateTmp=true"
+          echo "  rationale: each PrivateTmp=true service gets its own namespaced /tmp, so flock /tmp/<name> acquires a private inode."
+          echo "  fix: move the lock out of /tmp to a directory both units share via ReadWritePaths=."
+          echo "  see: https://github.com/hamlet-archer/ai-ops-meta/blob/main/incidents/2026-05-27-ai-chief-pull-deploy-webhook-race-condition.md"
+          echo "Violations:"
+          while IFS= read -r v; do echo "  $v"; done < "$VIOLATIONS_TMP"
+          exit 1
