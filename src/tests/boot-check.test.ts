@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  BootCheckError,
-  type BootCheckDeps,
-  runBootCheck,
-} from '../boot-check.js';
+import { type BootCheckDeps, BootCheckError, runBootCheck } from '../boot-check.js';
 import {
   GoogleSheetsUserOauthAdapter,
   type ValuesGetOptions,
@@ -32,7 +28,6 @@ function makeStubAdapter(
         },
       },
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 }
 
@@ -77,7 +72,7 @@ describe('runBootCheck — first-boot path', () => {
     expect(result.mapping.dateColumn).toBe(0);
     expect(Object.keys(result.mapping.staffColumns)).toEqual(['Sally']);
     expect(io.saved).not.toBeNull();
-    expect(io.saved!.headerHash).toBe(hashHeaderRows(GOOD_GRID[0]!, GOOD_GRID[1]!));
+    expect(io.saved!.headerHash).toBe(hashHeaderRows(GOOD_GRID[0], GOOD_GRID[1]));
   });
 
   it('fails loud when values.get returns no rows', async () => {
@@ -147,7 +142,7 @@ describe('runBootCheck — first-boot path', () => {
 describe('runBootCheck — persisted-mapping path', () => {
   const goodMapping: SheetShapeMapping = {
     version: SHEET_MAPPING_SCHEMA_VERSION,
-    headerHash: hashHeaderRows(GOOD_GRID[0]!, GOOD_GRID[1]!),
+    headerHash: hashHeaderRows(GOOD_GRID[0], GOOD_GRID[1]),
     dateColumn: 0,
     staffColumns: { Sally: { day: 1 } },
     statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },

@@ -121,9 +121,7 @@ const UNIT_SEPARATOR = '';
 
 function canonicaliseRow(row: ReadonlyArray<string | number | boolean | null | undefined>): string {
   return row
-    .map((cell) =>
-      cell === null || cell === undefined ? '' : String(cell).trim().toLowerCase(),
-    )
+    .map((cell) => (cell === null || cell === undefined ? '' : String(cell).trim().toLowerCase()))
     .join(UNIT_SEPARATOR);
 }
 
@@ -215,7 +213,9 @@ const SHARED_STAFF_DEFAULTS: Readonly<Record<string, RosterStatus>> = Object.fre
   '': 'not-working',
 });
 
-export const STAFF_STATUS_DEFAULTS: Readonly<Record<string, Readonly<Record<string, RosterStatus>>>> = Object.freeze({
+export const STAFF_STATUS_DEFAULTS: Readonly<
+  Record<string, Readonly<Record<string, RosterStatus>>>
+> = Object.freeze({
   Sally: SHARED_STAFF_DEFAULTS,
   Chloe: SHARED_STAFF_DEFAULTS,
 });
@@ -237,9 +237,7 @@ export function defaultStatusMapForStaff(
  * emitted in canonical `SUB_COLUMN_KEYS` order. The enum-map keys are
  * sorted for diff stability across re-probes.
  */
-function sortStatusMap(
-  m: Readonly<Record<string, RosterStatus>>,
-): Record<string, RosterStatus> {
+function sortStatusMap(m: Readonly<Record<string, RosterStatus>>): Record<string, RosterStatus> {
   const out: Record<string, RosterStatus> = {};
   for (const k of Object.keys(m).sort()) {
     out[k] = m[k]!;
@@ -314,7 +312,13 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
       'version_mismatch',
     );
   }
-  for (const k of ['headerHash', 'dateColumn', 'staffColumns', 'statusValueToEnumMap', 'probedAt'] as const) {
+  for (const k of [
+    'headerHash',
+    'dateColumn',
+    'staffColumns',
+    'statusValueToEnumMap',
+    'probedAt',
+  ] as const) {
     if (!(k in r)) {
       throw new SheetShapeMappingError(`mapping missing field: ${k}`, 'missing_field');
     }
@@ -380,7 +384,7 @@ export function parseMappingYaml(text: string): SheetShapeMapping {
         'invalid_staff_columns',
       );
     }
-    staffColumns[name] = cols as StaffSubColumns;
+    staffColumns[name] = cols;
   }
   if (Object.keys(staffColumns).length === 0) {
     throw new SheetShapeMappingError(

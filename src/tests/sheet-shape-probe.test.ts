@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { hashHeaderRows, SHEET_MAPPING_SCHEMA_VERSION } from '../sheet-shape-mapping.js';
 import { cellToIsoDate, probeSheetShape, SheetShapeProbeError } from '../sheet-shape-probe.js';
-import {
-  hashHeaderRows,
-  SHEET_MAPPING_SCHEMA_VERSION,
-} from '../sheet-shape-mapping.js';
 
 describe('cellToIsoDate', () => {
   it('parses ISO date strings', () => {
@@ -30,9 +27,7 @@ describe('cellToIsoDate', () => {
   });
 
   it('parses Sheets date-serial numbers (1899-12-30 epoch)', () => {
-    const serial = Math.floor(
-      (Date.UTC(2026, 4, 13) - Date.UTC(1899, 11, 30)) / 86_400_000,
-    );
+    const serial = Math.floor((Date.UTC(2026, 4, 13) - Date.UTC(1899, 11, 30)) / 86_400_000);
     expect(cellToIsoDate(serial)).toBe('2026-05-13');
   });
 
@@ -62,25 +57,37 @@ describe('probeSheetShape — happy path', () => {
   //     actually uses)
   //   • Chloe at row1[6], owning columns 6..12 with the full 7
   //     sub-headers in row 2.
-  const ROW1 = [
-    '', '', '',
-    'Sally', '', '',
-    'Chloe', '', '', '', '', '', '',
-  ];
+  const ROW1 = ['', '', '', 'Sally', '', '', 'Chloe', '', '', '', '', '', ''];
   const ROW2 = [
-    'Date', 'DOW', '',
-    'Day', 'Night', 'Remarks',
-    'Day', 'Night', 'Day Value', 'Night Value', 'Overtime', 'Annual Leave', 'Remarks',
+    'Date',
+    'DOW',
+    '',
+    'Day',
+    'Night',
+    'Remarks',
+    'Day',
+    'Night',
+    'Day Value',
+    'Night Value',
+    'Overtime',
+    'Annual Leave',
+    'Remarks',
   ];
-  const ROW3_SAMPLE = [
-    'Carried Forward', '', '',
-    '', '', '',
-    '', '', '', '', '', '0.0', '5.0',
-  ];
+  const ROW3_SAMPLE = ['Carried Forward', '', '', '', '', '', '', '', '', '', '', '0.0', '5.0'];
   const ROW4_SAMPLE = [
-    '2025/11/10', 'Mon', '',
-    'Work', '-', 'IB access\nPond filter',
-    'Full', 1, '-', 0, 0.3, 5.1, '',
+    '2025/11/10',
+    'Mon',
+    '',
+    'Work',
+    '-',
+    'IB access\nPond filter',
+    'Full',
+    1,
+    '-',
+    0,
+    0.3,
+    5.1,
+    '',
   ];
 
   it('parses the row-3/row-4 evidence into dateColumn:0 + per-staff sub-columns', () => {
@@ -126,7 +133,11 @@ describe('probeSheetShape — happy path', () => {
 
   it('default probedAt is a fresh ISO timestamp when omitted', () => {
     const mapping = probeSheetShape({
-      values: [['', 'Sally'], ['Date', 'Day'], ['2025-11-10', 'Work']],
+      values: [
+        ['', 'Sally'],
+        ['Date', 'Day'],
+        ['2025-11-10', 'Work'],
+      ],
     });
     expect(mapping.probedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
@@ -135,11 +146,15 @@ describe('probeSheetShape — happy path', () => {
 describe('probeSheetShape — fail-loud cases', () => {
   it('throws empty_header when the value grid has fewer than 2 rows', () => {
     expect(() => probeSheetShape({ values: [] })).toThrow(SheetShapeProbeError);
-    expect(() => probeSheetShape({ values: [['Sally']] })).toThrow(/empty_header|at least 2 header/);
+    expect(() => probeSheetShape({ values: [['Sally']] })).toThrow(
+      /empty_header|at least 2 header/,
+    );
   });
 
   it('throws empty_header when both header rows are empty', () => {
-    expect(() => probeSheetShape({ values: [[], []] })).toThrow(/header rows are empty|empty_header/);
+    expect(() => probeSheetShape({ values: [[], []] })).toThrow(
+      /header rows are empty|empty_header/,
+    );
   });
 
   it('throws no_date_rows when column A has no parseable dates (the 2026-05-18 failure mode)', () => {

@@ -40,11 +40,11 @@
  */
 
 import { readFileSync } from 'node:fs';
+
 import { OAuth2Client } from 'google-auth-library';
 import { google, type sheets_v4 } from 'googleapis';
 
-export const SPREADSHEETS_READONLY_SCOPE =
-  'https://www.googleapis.com/auth/spreadsheets.readonly';
+export const SPREADSHEETS_READONLY_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
 
 export const OAUTH_TOKEN_PATH_DEFAULT = '/etc/ai-roster-adviser/oauth-token.json';
 export const OAUTH_SUBJECT_DEFAULT = 'ai@liao.info';
@@ -136,9 +136,7 @@ export class GoogleSheetsUserOauthAdapter {
 
     const subject = (deps.subject ?? process.env.OAUTH_SUBJECT ?? OAUTH_SUBJECT_DEFAULT).trim();
     if (!subject) {
-      throw new Error(
-        'sheets_user_oauth_subject_unset: pass subject or set OAUTH_SUBJECT',
-      );
+      throw new Error('sheets_user_oauth_subject_unset: pass subject or set OAUTH_SUBJECT');
     }
     if ((FORBIDDEN_SUBJECTS as readonly string[]).includes(subject)) {
       throw new Error(
@@ -266,6 +264,6 @@ function loadAndValidateTokenFile(path: string): UserOauthTokenFile {
     client_secret: parsed.client_secret,
     refresh_token: parsed.refresh_token,
     token_uri: parsed.token_uri,
-    allowed_scopes: Object.freeze([...parsed.allowed_scopes]),
+    allowed_scopes: Object.freeze([...(parsed.allowed_scopes as readonly string[])]),
   };
 }

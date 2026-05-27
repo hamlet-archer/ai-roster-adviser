@@ -17,6 +17,7 @@ Reuses `ai@liao.info` Google OAuth (`feedback_shared_ai_credentials`) with scope
 ## Contracts
 
 Accepts:
+
 - [`roster.query.v1`](https://github.com/hamlet-archer/ai-ops-meta/blob/main/contracts/roster.query.v1.json)
 - [`roster.range.v1`](https://github.com/hamlet-archer/ai-ops-meta/blob/main/contracts/roster.range.v1.json)
 

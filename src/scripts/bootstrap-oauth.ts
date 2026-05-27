@@ -51,11 +51,11 @@
  */
 
 import { exec } from 'node:child_process';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { writeFile, access, mkdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, resolve, isAbsolute } from 'node:path';
+import { access, mkdir, writeFile } from 'node:fs/promises';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 const DEFAULT_SUBJECT = 'ai@liao.info';
 const SPREADSHEETS_READONLY_SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
@@ -84,8 +84,7 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   const subjectRaw = map.get('subject');
-  const subject =
-    typeof subjectRaw === 'string' ? subjectRaw.trim() : DEFAULT_SUBJECT;
+  const subject = typeof subjectRaw === 'string' ? subjectRaw.trim() : DEFAULT_SUBJECT;
   if ((FORBIDDEN_SUBJECTS as readonly string[]).includes(subject)) {
     throw new Error(
       `--subject=${subject} is forbidden: per feedback_no_kelvin_account_impersonation, ` +
@@ -99,7 +98,10 @@ function parseArgs(argv: readonly string[]): Args {
   const scopesRaw = map.get('scopes');
   const scopes =
     typeof scopesRaw === 'string'
-      ? scopesRaw.split(',').map((s) => s.trim()).filter(Boolean)
+      ? scopesRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
       : ['spreadsheets.readonly'];
   const resolvedScopes = scopes.map((s) => SCOPE_ALIAS[s] ?? s);
   if (!resolvedScopes.includes(SPREADSHEETS_READONLY_SCOPE)) {
@@ -110,20 +112,17 @@ function parseArgs(argv: readonly string[]): Args {
   }
 
   const portRaw = map.get('port');
-  const port =
-    typeof portRaw === 'string' ? Number.parseInt(portRaw, 10) || 0 : 8754;
+  const port = typeof portRaw === 'string' ? Number.parseInt(portRaw, 10) || 0 : 8754;
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`--port must be an integer in [1024, 65535]; got ${portRaw}`);
   }
 
   const outDirRaw = map.get('out-dir');
-  const outDir =
-    typeof outDirRaw === 'string' ? outDirRaw : './oauth-token';
+  const outDir = typeof outDirRaw === 'string' ? outDirRaw : './oauth-token';
   const outDirAbs = isAbsolute(outDir) ? outDir : resolve(process.cwd(), outDir);
 
   const outFileRaw = map.get('out-file');
-  const outFile =
-    typeof outFileRaw === 'string' ? outFileRaw : 'oauth-token.json';
+  const outFile = typeof outFileRaw === 'string' ? outFileRaw : 'oauth-token.json';
 
   const force = map.get('force') === true;
 
@@ -196,9 +195,7 @@ function openBrowser(url: string): void {
       : `xdg-open ${JSON.stringify(url)}`;
   exec(cmd, (err) => {
     if (err) {
-      process.stderr.write(
-        `(failed to open browser automatically — open manually: ${url}\n`,
-      );
+      process.stderr.write(`(failed to open browser automatically — open manually: ${url}\n`);
     }
   });
 }
@@ -270,7 +267,7 @@ async function main(): Promise<void> {
     throw new Error(
       'GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET must be set in env. ' +
         'Reuse the existing §G2 client (951896555491-88slv13200i...) by exporting its ' +
-        'client_id + client_secret. Spreadsheets.readonly must be added to that client\'s ' +
+        "client_id + client_secret. Spreadsheets.readonly must be added to that client's " +
         'consent screen in Google Cloud Console before this script will succeed.',
     );
   }
@@ -340,7 +337,7 @@ async function main(): Promise<void> {
   );
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   process.stderr.write(`fatal: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

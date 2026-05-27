@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_STATUS_VALUE_MAP,
@@ -13,9 +14,9 @@ import {
   resolveMappingPath,
   saveMappingToFile,
   SHEET_MAPPING_SCHEMA_VERSION,
+  type SheetShapeMapping,
   SheetShapeMappingError,
   SUB_COLUMN_KEYS,
-  type SheetShapeMapping,
 } from '../sheet-shape-mapping.js';
 
 function mkMapping(over: Partial<SheetShapeMapping> = {}): SheetShapeMapping {
@@ -25,7 +26,15 @@ function mkMapping(over: Partial<SheetShapeMapping> = {}): SheetShapeMapping {
     dateColumn: 0,
     staffColumns: {
       Sally: { day: 3, night: 4, remarks: 5 },
-      Chloe: { day: 6, night: 7, dayValue: 8, nightValue: 9, overtime: 10, annualLeave: 11, remarks: 12 },
+      Chloe: {
+        day: 6,
+        night: 7,
+        dayValue: 8,
+        nightValue: 9,
+        overtime: 10,
+        annualLeave: 11,
+        remarks: 12,
+      },
     },
     statusValueToEnumMap: { ...DEFAULT_STATUS_VALUE_MAP },
     probedAt: '2026-05-21T19:11:05Z',
@@ -98,7 +107,7 @@ describe('renderMappingYaml + parseMappingYaml', () => {
     // SUB_COLUMN_KEYS order for diff stability.
     const m = mkMapping({
       staffColumns: {
-        Sally: { remarks: 5, day: 3, night: 4 } as never,
+        Sally: { remarks: 5, day: 3, night: 4 },
       },
     });
     const yaml = renderMappingYaml(m);
@@ -137,7 +146,10 @@ describe('renderMappingYaml + parseMappingYaml', () => {
     const yaml = renderMappingYaml(m);
     // renderMappingYaml drops unknown keys silently (canonical order
     // emit); inject the bad key by hand to test the parser guard.
-    const tampered = yaml.replace('  Sally:\n    day: 3\n', '  Sally:\n    day: 3\n    made_up_key: 99\n');
+    const tampered = yaml.replace(
+      '  Sally:\n    day: 3\n',
+      '  Sally:\n    day: 3\n    made_up_key: 99\n',
+    );
     expect(() => parseMappingYaml(tampered)).toThrow(/unknown sub-column|invalid_staff/);
   });
 
@@ -157,7 +169,10 @@ describe('renderMappingYaml + parseMappingYaml', () => {
   });
 
   it('rejects an empty staffColumns map', () => {
-    const tampered = renderMappingYaml(mkMapping()).replace(/staffColumns:\n[\s\S]*?statusValueToEnumMap:/, 'staffColumns: {}\nstatusValueToEnumMap:');
+    const tampered = renderMappingYaml(mkMapping()).replace(
+      /staffColumns:\n[\s\S]*?statusValueToEnumMap:/,
+      'staffColumns: {}\nstatusValueToEnumMap:',
+    );
     expect(() => parseMappingYaml(tampered)).toThrow(/at least one staff/);
   });
 
@@ -272,7 +287,9 @@ describe('per-staff statusValueToEnumMap (G6.15.2)', () => {
 
 describe('resolveMappingPath', () => {
   it('honours ROSTER_SHEET_MAPPING_PATH when set', () => {
-    expect(resolveMappingPath({ ROSTER_SHEET_MAPPING_PATH: '/tmp/foo.yaml' })).toBe('/tmp/foo.yaml');
+    expect(resolveMappingPath({ ROSTER_SHEET_MAPPING_PATH: '/tmp/foo.yaml' })).toBe(
+      '/tmp/foo.yaml',
+    );
   });
   it('falls back to the production default when env var is unset', () => {
     expect(resolveMappingPath({})).toBe('/etc/roster-adviser/sheet-mapping.yaml');

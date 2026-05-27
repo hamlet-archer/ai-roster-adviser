@@ -15,9 +15,10 @@
  * existing DB file is a no-op.
  */
 
-import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+
+import Database, { type Database as DatabaseType } from 'better-sqlite3';
 
 export type RosterStatus =
   | 'working'

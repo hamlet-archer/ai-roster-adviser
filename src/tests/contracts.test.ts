@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { resolve, dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { describe, expect, it } from 'vitest';
+
 import { buildContractValidator } from '../contracts.js';
 
 const CONTRACTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../contracts');

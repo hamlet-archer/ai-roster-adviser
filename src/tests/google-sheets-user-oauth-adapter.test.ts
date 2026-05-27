@@ -15,17 +15,19 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import type { sheets_v4 } from 'googleapis';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import {
+  exchangeRefreshToken,
   FORBIDDEN_SUBJECTS,
   GoogleSheetsUserOauthAdapter,
   OAUTH_SUBJECT_DEFAULT,
   SPREADSHEETS_READONLY_SCOPE,
-  WL_LOG_DEFAULT_SHEET_ID,
-  exchangeRefreshToken,
   type UserOauthTokenFile,
   type ValuesGetOptions,
+  WL_LOG_DEFAULT_SHEET_ID,
 } from '../google-sheets-user-oauth-adapter.js';
 
 let tmpDir: string;
@@ -60,9 +62,9 @@ function mockClient(opts: {
   capturedParams?: sheets_v4.Params$Resource$Spreadsheets$Values$Get[];
 }): sheets_v4.Sheets {
   const values = {
-    get: async (params: sheets_v4.Params$Resource$Spreadsheets$Values$Get) => {
+    get: (params: sheets_v4.Params$Resource$Spreadsheets$Values$Get) => {
       opts.capturedParams?.push(params);
-      return { data: { values: opts.values ?? [] } };
+      return Promise.resolve({ data: { values: opts.values ?? [] } });
     },
   };
   const spreadsheets = { values };
@@ -97,9 +99,9 @@ describe('GoogleSheetsUserOauthAdapter.fromTokenFile — subject discipline', ()
     const prev = process.env.OAUTH_SUBJECT;
     process.env.OAUTH_SUBJECT = 'kelvin@liao.info';
     try {
-      expect(() =>
-        GoogleSheetsUserOauthAdapter.fromTokenFile({ tokenFilePath: path }),
-      ).toThrow(/sheets_user_oauth_subject_forbidden/);
+      expect(() => GoogleSheetsUserOauthAdapter.fromTokenFile({ tokenFilePath: path })).toThrow(
+        /sheets_user_oauth_subject_forbidden/,
+      );
     } finally {
       if (prev === undefined) delete process.env.OAUTH_SUBJECT;
       else process.env.OAUTH_SUBJECT = prev;
@@ -271,7 +273,7 @@ describe('exchangeRefreshToken — OAuth2 refresh path against a mocked token en
     expect(result.expires_in).toBe(3600);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
-    const [url, init] = fetchSpy.mock.calls[0]!;
+    const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe('https://oauth2.googleapis.com/token');
     expect((init as RequestInit).method).toBe('POST');
     const body = (init as RequestInit).body as URLSearchParams;

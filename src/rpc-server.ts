@@ -29,9 +29,10 @@
 
 import { chmodSync, existsSync, unlinkSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+
 import type { RosterCache } from './cache.js';
 import type { ContractValidator } from './contracts.js';
-import { handleRosterQuery, type HandlerError } from './handlers/roster-query.js';
+import { type HandlerError, handleRosterQuery } from './handlers/roster-query.js';
 import { handleRosterRange } from './handlers/roster-range.js';
 
 export interface RpcServerDeps {
@@ -49,8 +50,10 @@ const MAX_LINE_BYTES = 1024 * 1024;
 function defaultLogger(): NonNullable<RpcServerDeps['logger']> {
   return {
     info: (o) => console.log(JSON.stringify({ level: 'info', service: 'ai-roster-adviser', ...o })),
-    warn: (o) => console.warn(JSON.stringify({ level: 'warn', service: 'ai-roster-adviser', ...o })),
-    error: (o) => console.error(JSON.stringify({ level: 'error', service: 'ai-roster-adviser', ...o })),
+    warn: (o) =>
+      console.warn(JSON.stringify({ level: 'warn', service: 'ai-roster-adviser', ...o })),
+    error: (o) =>
+      console.error(JSON.stringify({ level: 'error', service: 'ai-roster-adviser', ...o })),
   };
 }
 
@@ -76,7 +79,11 @@ export function createRpcServer(deps: RpcServerDeps): Server {
         logger.warn({ phase: 'rpc', msg: 'oversize_line_dropped' });
         try {
           socket.end(
-            JSON.stringify({ ok: false, code: 'bad_query', message: 'request line exceeds 1 MiB' }) + '\n',
+            JSON.stringify({
+              ok: false,
+              code: 'bad_query',
+              message: 'request line exceeds 1 MiB',
+            }) + '\n',
           );
         } catch {
           // Best-effort.
@@ -150,7 +157,7 @@ function handleLine(
       response = {
         ok: false,
         code: 'bad_query',
-        message: `unsupported contract_id: ${envelope.contract_id}`,
+        message: `unsupported contract_id: ${String(envelope.contract_id)}`,
         trace_id: envelope.trace_id,
       } satisfies HandlerError & { trace_id: string };
     }

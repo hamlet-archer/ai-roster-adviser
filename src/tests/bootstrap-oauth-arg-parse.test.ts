@@ -12,15 +12,16 @@
  * small.
  */
 
-import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
 
 const SCRIPT_PATH = join(__dirname, '..', 'scripts', 'bootstrap-oauth.ts');
 const SOURCE = readFileSync(SCRIPT_PATH, 'utf8');
 
 describe('bootstrap-oauth — file shape contract', () => {
-  it("writes a JSON file with the fields GoogleSheetsUserOauthAdapter expects", () => {
+  it('writes a JSON file with the fields GoogleSheetsUserOauthAdapter expects', () => {
     // Fields the adapter's loadAndValidateTokenFile validator requires:
     for (const field of [
       'client_id',
@@ -66,24 +67,22 @@ describe('bootstrap-oauth — subject coverage (single subject, roster-adviser v
     expect(SOURCE).toMatch(/DEFAULT_SUBJECT\s*=\s*['"]ai@liao\.info['"]/);
   });
 
-  it("includes kelvin@liao.info in FORBIDDEN_SUBJECTS per feedback_no_kelvin_account_impersonation", () => {
+  it('includes kelvin@liao.info in FORBIDDEN_SUBJECTS per feedback_no_kelvin_account_impersonation', () => {
     expect(SOURCE).toMatch(
       /FORBIDDEN_SUBJECTS\s*=\s*Object\.freeze\(\[['"]kelvin@liao\.info['"]\]/,
     );
   });
 
-  it("defaults the scope to spreadsheets.readonly only", () => {
+  it('defaults the scope to spreadsheets.readonly only', () => {
     expect(SOURCE).toContain(`'https://www.googleapis.com/auth/spreadsheets.readonly'`);
     expect(SOURCE).toMatch(/\['spreadsheets\.readonly'\]/);
   });
 
-  it("refuses subject=kelvin@liao.info at parse-time", () => {
-    expect(SOURCE).toMatch(
-      /FORBIDDEN_SUBJECTS[^)]*\)\.includes\(subject\)/,
-    );
+  it('refuses subject=kelvin@liao.info at parse-time', () => {
+    expect(SOURCE).toMatch(/FORBIDDEN_SUBJECTS[^)]*\)\.includes\(subject\)/);
   });
 
-  it("refuses scope sets that lack spreadsheets.readonly (adapter contract)", () => {
+  it('refuses scope sets that lack spreadsheets.readonly (adapter contract)', () => {
     expect(SOURCE).toMatch(/--scopes must include spreadsheets\.readonly/);
   });
 });

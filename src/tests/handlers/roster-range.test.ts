@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { RosterCache } from '../../cache.js';
 import type { ContractEnvelope } from '../../contracts.js';
 import { handleRosterRange } from '../../handlers/roster-range.js';
@@ -49,10 +50,20 @@ describe('handleRosterRange', () => {
     expect(resp.entries).toHaveLength(6);
 
     const sallyMon = resp.entries.find((e) => e.person === 'sally' && e.date === '2026-05-13');
-    expect(sallyMon).toMatchObject({ status: 'working', hours: 8, source: 'cache', sheet_filled: true });
+    expect(sallyMon).toMatchObject({
+      status: 'working',
+      hours: 8,
+      source: 'cache',
+      sheet_filled: true,
+    });
 
     const sallyTue = resp.entries.find((e) => e.person === 'sally' && e.date === '2026-05-14');
-    expect(sallyTue).toMatchObject({ status: 'leave', hours: null, source: 'cache', sheet_filled: true });
+    expect(sallyTue).toMatchObject({
+      status: 'leave',
+      hours: null,
+      source: 'cache',
+      sheet_filled: true,
+    });
 
     const sallyWed = resp.entries.find((e) => e.person === 'sally' && e.date === '2026-05-15');
     expect(sallyWed).toMatchObject({ status: 'unknown', source: 'cache', sheet_filled: false });
@@ -80,10 +91,10 @@ describe('handleRosterRange', () => {
       payloadJson: '{}',
       updatedAt: '2026-05-11T00:00:00Z',
     });
-    const resp = handleRosterRange(
-      envelope({ people: ['sally'] }),
-      { cache, now: () => new Date('2026-05-13T12:00:00Z') },
-    );
+    const resp = handleRosterRange(envelope({ people: ['sally'] }), {
+      cache,
+      now: () => new Date('2026-05-13T12:00:00Z'),
+    });
     expect(resp.ok).toBe(true);
     if (!resp.ok) return;
     const sally = resp.entries.find((e) => e.person === 'sally' && e.date === '2026-05-13');
