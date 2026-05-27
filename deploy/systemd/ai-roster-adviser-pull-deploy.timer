@@ -1,0 +1,12 @@
+[Unit]
+Description=ai-roster-adviser pull-deploy poller (every 2 min)
+Documentation=https://github.com/hamlet-archer/ai-roster-adviser
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=ai-roster-adviser-pull-deploy.service
+
+[Install]
+WantedBy=timers.target
