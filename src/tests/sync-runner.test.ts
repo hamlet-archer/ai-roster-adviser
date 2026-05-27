@@ -12,10 +12,11 @@
  *   - `hoursForStatus`
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RosterCache } from '../cache.js';
 import {
@@ -55,7 +56,6 @@ function makeStubAdapter(
         },
       },
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 }
 
@@ -321,10 +321,7 @@ describe('resolveStaffDayCell — G6.15.5 priority rules', () => {
   });
 
   it('unknown text → unknown + unknownText:true', () => {
-    const r = resolveStaffDayCell(
-      { staffName: 'Sally', dayCell: 'Yetanotherthing' },
-      wlMapping(),
-    );
+    const r = resolveStaffDayCell({ staffName: 'Sally', dayCell: 'Yetanotherthing' }, wlMapping());
     expect(r.status).toBe('unknown');
     expect(r.unknownText).toBe(true);
   });
@@ -441,10 +438,14 @@ describe('runSyncCycle — happy path + grid iteration', () => {
     });
     expect(report.status).toBe('ok');
     const sally = cache.getEntry({ person: 'Sally', dateIso: '2025-11-10' });
-    const sallyPayload = JSON.parse(sally?.payloadJson ?? '{}') as { annual_leave_remaining?: number };
+    const sallyPayload = JSON.parse(sally?.payloadJson ?? '{}') as {
+      annual_leave_remaining?: number;
+    };
     expect(sallyPayload.annual_leave_remaining).toBeUndefined();
     const chloe = cache.getEntry({ person: 'Chloe', dateIso: '2025-11-10' });
-    const chloePayload = JSON.parse(chloe?.payloadJson ?? '{}') as { annual_leave_remaining?: number };
+    const chloePayload = JSON.parse(chloe?.payloadJson ?? '{}') as {
+      annual_leave_remaining?: number;
+    };
     expect(chloePayload.annual_leave_remaining).toBe(0);
   });
 

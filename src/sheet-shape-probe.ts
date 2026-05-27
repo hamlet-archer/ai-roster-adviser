@@ -80,33 +80,35 @@ function parseDateString(text: string): string | null {
   // YYYY-MM-DD.
   let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
   if (m) {
-    const yyyy = Number(m[1]!);
-    const mm = Number(m[2]!);
-    const dd = Number(m[3]!);
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
     if (validateYmd(yyyy, mm, dd)) return `${m[1]}-${m[2]}-${m[3]}`;
     return null;
   }
   // YYYY/MM/DD — the W&L Log uses this in column A (e.g. `2025/11/10`).
   m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(t);
   if (m) {
-    const yyyy = Number(m[1]!);
-    const mm = Number(m[2]!);
-    const dd = Number(m[3]!);
-    if (validateYmd(yyyy, mm, dd)) return `${m[1]!.padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
+    const yyyy = Number(m[1]);
+    const mm = Number(m[2]);
+    const dd = Number(m[3]);
+    if (validateYmd(yyyy, mm, dd)) return `${m[1].padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
     return null;
   }
   // DD/MM/YYYY or DD/MM/YY (UK-style, deliberately first).
   m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(t);
   if (m) {
-    let dd = Number(m[1]!);
-    let mm = Number(m[2]!);
-    let yyyy = Number(m[3]!);
-    if (m[3]!.length === 2) yyyy = yyyy + 2000;
-    if (validateYmd(yyyy, mm, dd)) return `${String(yyyy).padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
+    let dd = Number(m[1]);
+    let mm = Number(m[2]);
+    let yyyy = Number(m[3]);
+    if (m[3].length === 2) yyyy = yyyy + 2000;
+    if (validateYmd(yyyy, mm, dd))
+      return `${String(yyyy).padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
     // Fall back to US-style if UK-style was invalid.
-    dd = Number(m[2]!);
-    mm = Number(m[1]!);
-    if (validateYmd(yyyy, mm, dd)) return `${String(yyyy).padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
+    dd = Number(m[2]);
+    mm = Number(m[1]);
+    if (validateYmd(yyyy, mm, dd))
+      return `${String(yyyy).padStart(4, '0')}-${pad2(mm)}-${pad2(dd)}`;
     return null;
   }
   return null;
@@ -117,11 +119,7 @@ function validateYmd(yyyy: number, mm: number, dd: number): boolean {
   if (mm < 1 || mm > 12) return false;
   if (dd < 1 || dd > 31) return false;
   const d = new Date(Date.UTC(yyyy, mm - 1, dd));
-  return (
-    d.getUTCFullYear() === yyyy &&
-    d.getUTCMonth() === mm - 1 &&
-    d.getUTCDate() === dd
-  );
+  return d.getUTCFullYear() === yyyy && d.getUTCMonth() === mm - 1 && d.getUTCDate() === dd;
 }
 
 /** Convert one cell to an ISO date (or null if not a date). */
@@ -219,8 +217,8 @@ export function probeSheetShape(input: ProbeInput): SheetShapeMapping {
   // 3. Map each staff's sub-columns via row 2.
   const staffColumns: Record<string, StaffSubColumns> = {};
   for (let i = 0; i < staffStarts.length; i++) {
-    const { name, startCol } = staffStarts[i]!;
-    const endCol = i + 1 < staffStarts.length ? staffStarts[i + 1]!.startCol : row2.length;
+    const { name, startCol } = staffStarts[i];
+    const endCol = i + 1 < staffStarts.length ? staffStarts[i + 1].startCol : row2.length;
     const cols: Record<string, number> = {};
     for (let c = startCol; c < endCol; c++) {
       const sub = row2[c];
@@ -254,8 +252,8 @@ export function probeSheetShape(input: ProbeInput): SheetShapeMapping {
     // resolution time — no per-staff override is written here. G6.15.2.
     const staffSeed = defaultStatusMapForStaff(name);
     const staffSubCols: StaffSubColumns = staffSeed
-      ? ({ ...cols, statusValueToEnumMap: { ...staffSeed } } as StaffSubColumns)
-      : (cols as StaffSubColumns);
+      ? { ...cols, statusValueToEnumMap: { ...staffSeed } }
+      : cols;
     staffColumns[name] = staffSubCols;
   }
 

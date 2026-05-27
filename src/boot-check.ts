@@ -37,8 +37,8 @@ import {
   loadMappingFromFile,
   resolveMappingPath,
   saveMappingToFile,
-  SheetShapeMappingError,
   type SheetShapeMapping,
+  SheetShapeMappingError,
 } from './sheet-shape-mapping.js';
 import { probeSheetShape, SheetShapeProbeError } from './sheet-shape-probe.js';
 
@@ -75,7 +75,7 @@ const RANKED_CAUSES_OAUTH_LOAD: readonly string[] = [
 
 const RANKED_CAUSES_VALUES_GET: readonly string[] = [
   'Refresh token expired or revoked (the per-user OAuth grant for ai@liao.info was rotated; re-run scripts/bootstrap-oauth.ts to mint a fresh refresh token)',
-  "Sheet not shared with ai@liao.info (open the W&L sheet → Share → confirm ai@liao.info has at least Viewer access)",
+  'Sheet not shared with ai@liao.info (open the W&L sheet → Share → confirm ai@liao.info has at least Viewer access)',
   'Sheet id wrong (env var ROSTER_SHEET_ID overrides the canonical default; check the value if set, or that the canonical sheet was not deleted/renamed)',
 ];
 
@@ -154,7 +154,7 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
   let values: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   try {
     const res = await adapter.valuesGet({ spreadsheetId: sheetId, range: sheetRange });
-    values = res.values as ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
+    values = res.values;
   } catch (err) {
     throw new BootCheckError({
       level: 'fatal',
@@ -182,7 +182,8 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
   let mapping: SheetShapeMapping | null;
   const mappingPath = resolveMappingPath(env);
   const load = deps.mappingIO?.load ?? (() => loadMappingFromFile(mappingPath));
-  const save = deps.mappingIO?.save ?? ((m: SheetShapeMapping) => saveMappingToFile(mappingPath, m));
+  const save =
+    deps.mappingIO?.save ?? ((m: SheetShapeMapping) => saveMappingToFile(mappingPath, m));
   try {
     mapping = load();
   } catch (err) {
@@ -235,8 +236,7 @@ export async function runBootCheck(deps: BootCheckDeps = {}): Promise<BootCheckR
         persisted_hash: mapping.headerHash,
         live_hash: liveHash,
         mapping_path: mappingPath,
-        hint:
-          'Re-probe by deleting the mapping file (after reviewing what changed) — the agent will write a fresh mapping on next boot.',
+        hint: 'Re-probe by deleting the mapping file (after reviewing what changed) — the agent will write a fresh mapping on next boot.',
       },
       ranked_causes: RANKED_CAUSES_HEADER_HASH,
     });

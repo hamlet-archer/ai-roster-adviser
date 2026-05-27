@@ -84,8 +84,7 @@ export function handleRosterQuery(
   const stalenessSeconds = syncState
     ? Math.max(0, Math.floor((now().getTime() - Date.parse(syncState.lastSyncIso)) / 1000))
     : null;
-  const cacheStale =
-    stalenessSeconds !== null && stalenessSeconds > ROSTER_CACHE_MAX_STALENESS_S;
+  const cacheStale = stalenessSeconds !== null && stalenessSeconds > ROSTER_CACHE_MAX_STALENESS_S;
 
   const row = deps.cache.getEntry({ person, dateIso: date });
 

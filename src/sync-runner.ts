@@ -21,10 +21,13 @@
  *      filter is the runtime guard.
  */
 
-import type { RosterCache } from './cache.js';
-import type { RosterStatus } from './cache.js';
+import type { RosterCache, RosterStatus } from './cache.js';
 import type { GoogleSheetsUserOauthAdapter } from './google-sheets-user-oauth-adapter.js';
-import { hashHeaderRows, type SheetShapeMapping, type StaffSubColumns } from './sheet-shape-mapping.js';
+import {
+  hashHeaderRows,
+  type SheetShapeMapping,
+  type StaffSubColumns,
+} from './sheet-shape-mapping.js';
 import { cellToIsoDate } from './sheet-shape-probe.js';
 
 // PATCH-EXPIRY: 2026-08-13 owner=roster-adviser reason=https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (roster-adviser sub-item 3 magic-number register)
@@ -72,10 +75,7 @@ export interface SyncCycleReport {
   readonly traceId: string;
   readonly startedAtIso: string;
   readonly endedAtIso: string;
-  readonly status:
-    | 'ok'
-    | 'header_hash_mismatch'
-    | 'sheet_error';
+  readonly status: 'ok' | 'header_hash_mismatch' | 'sheet_error';
   readonly headerHashOk: boolean;
   readonly cellsUpserted: number;
   readonly cellsSkipped: number;
@@ -365,8 +365,7 @@ export async function runSyncCycle(deps: SyncCycleDeps): Promise<SyncCycleReport
       const dayCell = row[cols.day] ?? null;
       const annualLeaveCell =
         cols.annualLeave !== undefined ? (row[cols.annualLeave] ?? null) : undefined;
-      const remarksCell =
-        cols.remarks !== undefined ? (row[cols.remarks] ?? null) : undefined;
+      const remarksCell = cols.remarks !== undefined ? (row[cols.remarks] ?? null) : undefined;
       // Empty Day cell with no sick-in-remarks → skip (don't pollute the
       // cache with `unknown` rows for empty cells; matches v0 behaviour).
       // G6.15.5: the AL > 0 escape hatch is gone — Annual Leave is a

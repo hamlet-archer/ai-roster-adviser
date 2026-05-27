@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, statSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { RosterCache, ROSTER_STATUS_VALUES, type RosterEntryRow } from '../cache.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { ROSTER_STATUS_VALUES, RosterCache, type RosterEntryRow } from '../cache.js';
 
 function mkRow(over: Partial<RosterEntryRow> = {}): RosterEntryRow {
   return {
@@ -141,7 +142,11 @@ describe('RosterCache', () => {
     const filePath = join(dir, 'cache.db');
     // Re-open + dump column names from sqlite_master via better-sqlite3.
     cache = new RosterCache({ path: filePath });
-    const tables = (cache as unknown as { db: { prepare: (s: string) => { all: () => Array<{ name: string; sql: string }> } } }).db
+    const tables = (
+      cache as unknown as {
+        db: { prepare: (s: string) => { all: () => Array<{ name: string; sql: string }> } };
+      }
+    ).db
       .prepare("SELECT name, sql FROM sqlite_master WHERE type='table'")
       .all();
     for (const t of tables) {
@@ -165,8 +170,9 @@ describe('RosterCache', () => {
     const names = readdirSync(dir);
     // better-sqlite3 may flush wal on close, so check that the journal is wal
     // by querying the pragma directly via the public DB connection.
-    const mode = (cache as unknown as { db: { pragma: (s: string, opts?: unknown) => unknown } }).db
-      .pragma('journal_mode', { simple: true });
+    const mode = (
+      cache as unknown as { db: { pragma: (s: string, opts?: unknown) => unknown } }
+    ).db.pragma('journal_mode', { simple: true });
     expect(mode).toBe('wal');
     // The wal/shm file presence is opportunistic — accept either presence or
     // absence; the pragma above is the authoritative check.

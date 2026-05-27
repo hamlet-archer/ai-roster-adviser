@@ -1,12 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { RosterCache } from '../cache.js';
 import { buildContractValidator } from '../contracts.js';
-import { startRpcServer, type RunningRpcServer, createRpcServer } from '../rpc-server.js';
+import { createRpcServer, type RunningRpcServer, startRpcServer } from '../rpc-server.js';
 import { ROSTER_SYNC_SOURCE } from '../sync-runner.js';
 
 const CONTRACTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../../contracts');
@@ -31,7 +33,7 @@ function roundTrip(socketPath: string, payload: object | string): Promise<unknow
         try {
           resolveRT(JSON.parse(line));
         } catch (err) {
-          reject(err);
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
       }
     });
@@ -122,7 +124,10 @@ describe('rpc-server integration', () => {
       caller_agent_id: 'test',
       people: ['sally', 'ai-doer'],
       window: { start: '2026-05-13', end: '2026-05-14' },
-    })) as { ok: boolean; entries: ReadonlyArray<{ person: string; date: string; status: string }> };
+    })) as {
+      ok: boolean;
+      entries: ReadonlyArray<{ person: string; date: string; status: string }>;
+    };
     expect(resp.ok).toBe(true);
     expect(resp.entries).toHaveLength(4);
   });

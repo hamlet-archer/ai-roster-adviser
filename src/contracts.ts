@@ -6,19 +6,17 @@
  * level validate(unknown) → discriminated result.
  */
 
-import { Ajv2020 } from 'ajv/dist/2020.js';
-import type { ValidateFunction } from 'ajv';
-import { default as addFormats } from 'ajv-formats';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import type { ValidateFunction } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import { default as addFormats } from 'ajv-formats';
 
 export type ContractId = 'roster.query.v1' | 'roster.range.v1';
 
-export const SUPPORTED_CONTRACTS: readonly ContractId[] = [
-  'roster.query.v1',
-  'roster.range.v1',
-];
+export const SUPPORTED_CONTRACTS: readonly ContractId[] = ['roster.query.v1', 'roster.range.v1'];
 
 export interface ContractEnvelope {
   readonly contract_id: ContractId;
@@ -32,7 +30,9 @@ export interface ContractEnvelope {
 }
 
 export interface ContractValidator {
-  validate(envelope: unknown): { ok: true; value: ContractEnvelope } | { ok: false; errors: string };
+  validate(
+    envelope: unknown,
+  ): { ok: true; value: ContractEnvelope } | { ok: false; errors: string };
 }
 
 function defaultContractsDir(): string {
@@ -42,7 +42,9 @@ function defaultContractsDir(): string {
   return resolve(here, '..', 'contracts');
 }
 
-export function buildContractValidator(contractsDir: string = defaultContractsDir()): ContractValidator {
+export function buildContractValidator(
+  contractsDir: string = defaultContractsDir(),
+): ContractValidator {
   const ajv = new Ajv2020({
     allErrors: true,
     strict: false,
@@ -58,9 +60,7 @@ export function buildContractValidator(contractsDir: string = defaultContractsDi
 
   function fmtErrors(errors: ValidateFunction['errors']): string {
     if (!errors) return 'unknown validation error';
-    return errors
-      .map((e) => `${e.instancePath || '(root)'} ${e.message ?? ''}`.trim())
-      .join('; ');
+    return errors.map((e) => `${e.instancePath || '(root)'} ${e.message ?? ''}`.trim()).join('; ');
   }
 
   return {

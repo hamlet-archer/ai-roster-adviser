@@ -17,8 +17,9 @@
  */
 
 import { v7 as uuidv7 } from 'uuid';
-import { RosterCache } from '../cache.js';
+
 import { BootCheckError, renderDiagnostic, runBootCheck } from '../boot-check.js';
+import { RosterCache } from '../cache.js';
 import { renderSyncSummary, runSyncCycle } from '../sync-runner.js';
 
 const DEFAULT_DB_PATH = '/var/lib/ai-roster-adviser/roster.db';
@@ -30,11 +31,10 @@ async function main(): Promise<number> {
     bootResult = await runBootCheck();
   } catch (err) {
     if (err instanceof BootCheckError) {
-      // eslint-disable-next-line no-console
       console.error(renderDiagnostic(err.diagnostic));
       return 1;
     }
-    // eslint-disable-next-line no-console
+
     console.error(
       JSON.stringify({
         level: 'fatal',
@@ -53,7 +53,7 @@ async function main(): Promise<number> {
   // — A1:ZZ covers every data row a sane roster will ever have.
   const sheetRange = process.env.ROSTER_SHEET_FULL_RANGE ?? DEFAULT_FULL_SHEET_RANGE;
   const traceId = uuidv7();
-  // eslint-disable-next-line no-console
+
   console.log(
     JSON.stringify({
       level: 'info',
@@ -73,7 +73,7 @@ async function main(): Promise<number> {
       sheetRange,
       traceId,
     });
-    // eslint-disable-next-line no-console
+
     console.log(renderSyncSummary(report));
     return report.status === 'ok' ? 0 : 1;
   } finally {
@@ -84,7 +84,6 @@ async function main(): Promise<number> {
 main()
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
-    // eslint-disable-next-line no-console
     console.error(
       JSON.stringify({
         level: 'fatal',

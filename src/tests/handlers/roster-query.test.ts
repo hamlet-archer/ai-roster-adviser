@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+
 import { RosterCache } from '../../cache.js';
 import type { ContractEnvelope } from '../../contracts.js';
 import { handleRosterQuery } from '../../handlers/roster-query.js';
@@ -25,10 +26,10 @@ describe('handleRosterQuery', () => {
   it('returns hardcoded working/24h for ai-doer without touching the cache', () => {
     const cache = freshCache();
     cache.setSyncState(ROSTER_SYNC_SOURCE, 'h', '2026-05-13T00:00:00Z');
-    const resp = handleRosterQuery(
-      envelope({ person: 'ai-doer' }),
-      { cache, now: () => new Date('2026-05-14T00:00:00Z') },
-    );
+    const resp = handleRosterQuery(envelope({ person: 'ai-doer' }), {
+      cache,
+      now: () => new Date('2026-05-14T00:00:00Z'),
+    });
     expect(resp).toMatchObject({
       ok: true,
       person: 'ai-doer',

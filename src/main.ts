@@ -29,10 +29,11 @@
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { RosterCache } from './cache.js';
+
 import { BootCheckError, renderDiagnostic, runBootCheck } from './boot-check.js';
+import { RosterCache } from './cache.js';
 import { buildContractValidator } from './contracts.js';
-import { startRpcServer, type RunningRpcServer } from './rpc-server.js';
+import { type RunningRpcServer, startRpcServer } from './rpc-server.js';
 
 const DEFAULT_DB_PATH = '/var/lib/ai-roster-adviser/roster.db';
 // systemd RuntimeDirectory=ai-roster-adviser creates /run/ai-roster-adviser/.
