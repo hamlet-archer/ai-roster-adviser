@@ -1,0 +1,93 @@
+name: no-oauth-revoke
+
+# N18 — TEMPLATE for the per-repo CI workflow that bans the literal string
+# `oauth2.googleapis.com/revoke` in tracked files. Copy this file verbatim
+# into `.github/workflows/no-oauth-revoke.yml` in any agent repo (no
+# `sed` substitutions needed — the workflow is self-contained).
+#
+# Google's revoke endpoint invalidates every refresh_token under the
+# (user, GCP project) consent grant — not just the passed token. A
+# 2026-05-27 incident killed four production tokens with a single revoke
+# call against a temp write-scope token.
+#
+# Reading:
+#   - hamlet-archer/ai-ops-meta — docs/architecture.md §10 (OAuth revoke
+#     blast radius bullet)
+#   - hamlet-archer/ai-ops-meta — incidents/2026-05-27-oauth-revoke-cascade-multiservice.md
+#   - hamlet-archer/ai-ops-meta — architect-backlog.md §N18
+#
+# Allowlist: `scripts/lint-no-oauth-revoke.allowlist` in the agent repo,
+# one path-prefix per line, `#` for comments. Each agent typically
+# allowlists its own workflow file and (if present) any local archived
+# documentation that references the revoke literal:
+#
+#   .github/workflows/no-oauth-revoke.yml
+#   scripts/lint-no-oauth-revoke.allowlist
+#
+# Files outside the allowlist that contain the literal fail the job
+# with a clear ::error annotation pointing back at the reading list.
+#
+# How to install in a new agent repo:
+#   1. Copy this file: `cp ~/Repo/ai-ops-meta/deploy/templates/no-oauth-revoke.yml ~/Repo/<repo>/.github/workflows/no-oauth-revoke.yml`
+#   2. Create the empty allowlist:
+#        printf '# N18 allowlist — see ai-ops-meta architect-backlog.md\n.github/workflows/no-oauth-revoke.yml\nscripts/lint-no-oauth-revoke.allowlist\n' > ~/Repo/<repo>/scripts/lint-no-oauth-revoke.allowlist
+#   3. Commit + open a PR — the workflow runs on push and pull_request.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  no-oauth-revoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Grep tracked files for revoke literal
+        run: |
+          set -euo pipefail
+          TARGET='oauth2.googleapis.com/revoke'
+          ALLOWLIST_FILE='scripts/lint-no-oauth-revoke.allowlist'
+
+          # Load allowlist (path-prefix matching; comments + blanks skipped).
+          allow=""
+          if [[ -f "$ALLOWLIST_FILE" ]]; then
+            allow=$(grep -v '^\s*#' "$ALLOWLIST_FILE" | grep -v '^\s*$' || true)
+          fi
+
+          # Find tracked files containing the literal.
+          hits=$(git ls-files -z | xargs -0 grep -lF -- "$TARGET" 2>/dev/null || true)
+          if [[ -z "$hits" ]]; then
+            echo "no-oauth-revoke: clean — no occurrences of $TARGET in tracked files"
+            exit 0
+          fi
+
+          # Filter hits through the allowlist (prefix match).
+          filtered=""
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            skip=0
+            if [[ -n "$allow" ]]; then
+              while IFS= read -r prefix; do
+                [[ -z "$prefix" ]] && continue
+                case "$f" in
+                  "$prefix"*) skip=1; break ;;
+                esac
+              done <<< "$allow"
+            fi
+            [[ $skip -eq 0 ]] && filtered+="$f"$'\n'
+          done <<< "$hits"
+
+          if [[ -n "$filtered" ]]; then
+            echo "::error::Disallowed reference to $TARGET — see ai-ops-meta/docs/architecture.md §10 (OAuth revoke blast radius)."
+            echo "Hits:"
+            printf '  %s\n' $filtered
+            echo
+            echo "If the reference is documentation or an allowed audit trail,"
+            echo "add the file path-prefix to $ALLOWLIST_FILE with a # justification."
+            exit 1
+          fi
+
+          echo "no-oauth-revoke: clean — all $TARGET occurrences match allowlist"

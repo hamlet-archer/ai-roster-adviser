@@ -1,0 +1,3 @@
+# N18 allowlist — see ai-ops-meta architect-backlog.md
+.github/workflows/no-oauth-revoke.yml
+scripts/lint-no-oauth-revoke.allowlist
