@@ -25,6 +25,7 @@ import {
   type OneshotOutcome,
   recordOneshotOutcome,
 } from '../oneshot-fail-loud.js';
+import { closeOpsDb, runSyncWithTrace } from '../ops-db.js';
 import { renderSyncSummary, runSyncCycle } from '../sync-runner.js';
 
 const DEFAULT_DB_PATH = '/var/lib/ai-roster-adviser/roster.db';
@@ -122,14 +123,21 @@ async function main(): Promise<number> {
   );
   const cache = new RosterCache({ path: dbPath });
   try {
-    const report = await runSyncCycle({
-      adapter,
-      cache,
-      mapping,
-      sheetId,
-      sheetRange,
-      traceId,
-    });
+    // Wrap the cycle in a control-plane run so each 15-min timer fire writes an
+    // ops.db `runs` row — the dashboard's fleet-liveness probe (AI1b).
+    // runSyncWithTrace returns the report unchanged and is fail-soft on the
+    // trace, so the exit-code + fail-loud semantics below are preserved even if
+    // ops.db is unreachable.
+    const report = await runSyncWithTrace(() =>
+      runSyncCycle({
+        adapter,
+        cache,
+        mapping,
+        sheetId,
+        sheetRange,
+        traceId,
+      }),
+    );
 
     console.log(renderSyncSummary(report));
     if (report.status === 'ok') {
@@ -143,6 +151,7 @@ async function main(): Promise<number> {
     return 1;
   } finally {
     cache.close();
+    await closeOpsDb();
   }
 }
 

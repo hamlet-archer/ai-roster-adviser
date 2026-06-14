@@ -33,6 +33,7 @@ import { dirname } from 'node:path';
 import { BootCheckError, renderDiagnostic, runBootCheck } from './boot-check.js';
 import { RosterCache } from './cache.js';
 import { buildContractValidator } from './contracts.js';
+import { closeOpsDb, openOpsDb } from './ops-db.js';
 import { type RunningRpcServer, startRpcServer } from './rpc-server.js';
 
 const DEFAULT_DB_PATH = '/var/lib/ai-roster-adviser/roster.db';
@@ -79,7 +80,27 @@ async function main(): Promise<number> {
     return 2;
   }
 
-  // 2. Long-running RPC server.
+  // 2. Register the agents row + open the shared ops.db handle once at boot, so
+  // roster-adviser is visible to the dashboard fleet-liveness probe even before
+  // the first 15-min sync timer fires (AI1b). Bootstrap is an UPSERT, so a
+  // registry change self-heals here. Best-effort: a boot-time ops.db outage must
+  // not block the RPC daemon. (The `runs` row per sync cycle is written by the
+  // sync oneshot, not here — this daemon intentionally runs no sync.)
+  try {
+    await openOpsDb();
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        level: 'warn',
+        service: 'ai-roster-adviser',
+        phase: 'ops-db',
+        msg: 'ops_db_open_failed_at_boot',
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+
+  // 3. Long-running RPC server.
   const socketDir = dirname(socketPath);
   if (!existsSync(socketDir)) {
     try {
@@ -123,6 +144,9 @@ async function main(): Promise<number> {
       await running.close();
     } finally {
       cache.close();
+      await closeOpsDb().catch(() => {
+        /* best-effort flush on shutdown */
+      });
     }
     process.exit(0);
   };

@@ -14,6 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@hamlet-archer/ai-ops-control-plane": "git+https://github.com/hamlet-archer/ai-ops-control-plane.git#v0.1.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "better-sqlite3": "^11.5.0",

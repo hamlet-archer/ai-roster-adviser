@@ -23,7 +23,10 @@ LoadCredential=oauth-token:/etc/ai-roster-adviser/oauth-token.json
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser
+# /var/lib/ai-ops holds the shared control-plane ops.db the sync oneshot now
+# writes a run trace to (AI1b). Without it, ProtectSystem=strict makes ops.db
+# read-only and the trace silently degrades to untraced.
+ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser /var/lib/ai-ops
 PrivateTmp=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes

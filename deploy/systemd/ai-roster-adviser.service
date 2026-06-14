@@ -55,7 +55,11 @@ ProtectHome=true
 # /etc/roster-adviser holds the sheet-shape mapping yaml (sub-item 2);
 # the sync runner timer + the RPC daemon share it (the daemon reads it
 # during runBootCheck — no writes, but the path needs read access).
-ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser
+# /var/lib/ai-ops holds the shared control-plane ops.db: the daemon opens it at
+# boot to register the agents row (AI1b). ProtectSystem=strict makes everything
+# outside ReadWritePaths read-only, which is why the boot-time ops.db open
+# returns "attempt to write a readonly database" without it.
+ReadWritePaths=/var/lib/ai-roster-adviser /etc/roster-adviser /var/lib/ai-ops
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
