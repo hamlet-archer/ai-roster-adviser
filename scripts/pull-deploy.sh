@@ -9,11 +9,16 @@
 # pattern: cloud-egress webhook POSTs are unreliable from inside the
 # runner sandbox, so polling closes the loop deterministically.
 #
-# Stable runtime path: /opt/ai-roster-adviser-deploy/pull-deploy.sh
-# (lives outside /opt/ai-roster-adviser so git resets inside the repo
-# cannot wipe it). Source of truth is the copy in this repo at
-# scripts/pull-deploy.sh; deploy.sh self-installs the stable copy on
-# each successful run.
+# Stable runtime paths (both live outside /opt/ai-roster-adviser so git
+# resets inside the repo cannot wipe them):
+#   /opt/ai-roster-adviser-deploy/pull-deploy.sh  (this script)
+#   /opt/ai-roster-adviser-deploy/deploy.sh        (the heavy-lifting script)
+# Source of truth for BOTH is this repo (scripts/pull-deploy.sh +
+# scripts/deploy.sh). After each successful deploy this puller self-installs
+# the repo copy of pull-deploy.sh AND of deploy.sh to those stable paths
+# (AI4) — previously only pull-deploy.sh was synced, so the box deploy.sh
+# drifted silently from the repo (the on-box `git checkout -fB` wedge fix
+# lived only on the VPS until this was wired).
 
 set -euo pipefail
 
@@ -94,6 +99,19 @@ fi
 # currently executing.
 if [[ -f "$REPO_DIR/scripts/pull-deploy.sh" ]] && [[ "$(realpath "$0")" == "$STABLE_PATH" ]]; then
   install -m 755 "$REPO_DIR/scripts/pull-deploy.sh" "$STABLE_PATH"
+fi
+
+# AI4 — also self-update the stable deploy.sh copy. The box copy at
+# $DEPLOY_SCRIPT is otherwise hand-maintained and drifts silently from
+# scripts/deploy.sh (it did: the `git checkout -fB` wedge fix lived only on
+# the VPS until this line). After deploy.sh's own `git reset --hard
+# origin/main` the working-tree copy IS the just-pulled version, so this
+# installs whatever we just deployed. Same atomic install + stable-path guard
+# as the pull-deploy self-update above; only fires on a successful deploy
+# (guarded by the non-zero deploy_status early-exit above), so a failed
+# deploy never ships a new deploy.sh.
+if [[ -f "$REPO_DIR/scripts/deploy.sh" ]] && [[ "$(realpath "$0")" == "$STABLE_PATH" ]]; then
+  install -m 755 "$REPO_DIR/scripts/deploy.sh" "$DEPLOY_SCRIPT"
 fi
 
 # B8.10.4 — post-daemon-reload systemd-unit drift check. Mirrors the

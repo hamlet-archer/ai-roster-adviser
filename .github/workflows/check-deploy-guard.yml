@@ -5,15 +5,21 @@ name: check-deploy-guard
 #
 # ai-roster-adviser uses split deploy (same shape as ai-calendar-adviser):
 # pull-deploy.sh ships in this repo (self-installed onto the VPS at
-# /opt/ai-roster-adviser-deploy/pull-deploy.sh), but the heavy-lifting
-# deploy script (/opt/ai-roster-adviser-deploy/deploy.sh) lives out-of-
-# band on the VPS and is NOT version-controlled here. So B8.4 cannot
-# mirror B8.2's "grep scripts/deploy.sh for git reset" guard verbatim;
-# the actual reset happens in a file that isn't in this repo to check.
+# /opt/ai-roster-adviser-deploy/pull-deploy.sh) and delegates the heavy
+# lifting to /opt/ai-roster-adviser-deploy/deploy.sh.
 #
-# What CAN be guarded is the puller's contribution to the deploy
-# contract — three structural invariants whose silent removal would
-# turn pull-deploy back into a silent-failure surface:
+# AI4 (2026-06-15) — scripts/deploy.sh IS now version-controlled in this
+# repo (added in #24 as source-of-truth) AND the puller self-installs it to
+# the VPS on each successful deploy, exactly like pull-deploy.sh. Before AI4
+# the box copy drifted silently (the `git checkout -fB` wedge fix lived only
+# on the VPS). So B8.4 can now ALSO mirror B8.2's "grep scripts/deploy.sh
+# for git reset" guard — the reset happens in a file that IS in this repo to
+# check. (The prior comment here said deploy.sh was "NOT version-controlled
+# here"; that was true when this guard was first written and is now stale.)
+#
+# What is guarded: the puller's contribution to the deploy contract —
+# structural invariants whose silent removal would turn the deploy chain
+# back into a silent-failure surface:
 #
 #   1. `set -euo pipefail` — fail-loud bash mode. Without this, an
 #      intermediate command failing mid-tick (git fetch, install,
@@ -25,6 +31,12 @@ name: check-deploy-guard
 #   3. `"$DEPLOY_SCRIPT"` invocation. Without this, the puller does
 #      nothing — fetches HEAD, notices it changed, and never delegates
 #      to the actual deploy machinery.
+#   4. (AI4) deploy.sh self-install via `install -m 755 ... "$DEPLOY_SCRIPT"`.
+#      Without this, the VPS deploy.sh drifts silently from scripts/deploy.sh
+#      again — the exact failure AI4 fixed.
+#   5. (AI4) scripts/deploy.sh uses force-checkout (`git checkout -fB`) +
+#      `git reset --hard`. A plain `-B` aborts on the dirty package-lock that
+#      `npm prune` leaves, wedging any dependency-changing deploy on stale code.
 #
 # Same blast-radius semantics as B8.1 / B8.2 / B8.3 (deployed code MUST
 # match a committed HEAD on origin/main + every layer of the deploy
@@ -37,11 +49,13 @@ on:
   pull_request:
     paths:
       - 'scripts/pull-deploy.sh'
+      - 'scripts/deploy.sh'
       - '.github/workflows/check-deploy-guard.yml'
   push:
     branches: [main]
     paths:
       - 'scripts/pull-deploy.sh'
+      - 'scripts/deploy.sh'
       - '.github/workflows/check-deploy-guard.yml'
 
 jobs:
@@ -76,6 +90,34 @@ jobs:
             exit 1
           fi
           echo "B8.4 guard verified: scripts/pull-deploy.sh sets -euo pipefail + self-installs via install -m 755 + invokes \$DEPLOY_SCRIPT."
+
+      - name: Verify scripts/pull-deploy.sh self-installs deploy.sh (AI4)
+        run: |
+          if ! grep -qE 'install -m 755 .* "\$DEPLOY_SCRIPT"' scripts/pull-deploy.sh; then
+            echo "::error file=scripts/pull-deploy.sh::AI4 guard removed — pull-deploy.sh no longer self-installs deploy.sh via 'install -m 755 ... \"\$DEPLOY_SCRIPT\"'"
+            echo "  rationale: without it, the VPS /opt/ai-roster-adviser-deploy/deploy.sh drifts silently from scripts/deploy.sh — the on-box -fB wedge fix lived only on the VPS before AI4."
+            echo "  see: https://github.com/hamlet-archer/ai-ops-meta/blob/main/architect-backlog.md (AI4)"
+            exit 1
+          fi
+          echo "AI4 guard verified: scripts/pull-deploy.sh self-installs deploy.sh to \$DEPLOY_SCRIPT."
+
+      - name: Verify scripts/deploy.sh exists + force-checkouts + git reset --hard (AI4 / B8.2 shape)
+        run: |
+          test -f scripts/deploy.sh || {
+            echo "::error::scripts/deploy.sh missing — AI4 requires the in-repo deploy script (it is the self-installed source of truth)"
+            exit 1
+          }
+          if ! grep -qE 'git checkout -fB main origin/main' scripts/deploy.sh; then
+            echo "::error file=scripts/deploy.sh::AI4 guard — deploy.sh no longer force-checkouts (git checkout -fB main origin/main)"
+            echo "  rationale: a plain 'git checkout -B' aborts on the dirty package-lock.json that 'npm prune --omit=dev' leaves, wedging any dependency-changing deploy on stale code."
+            exit 1
+          fi
+          if ! grep -qE 'git reset --hard origin/main' scripts/deploy.sh; then
+            echo "::error file=scripts/deploy.sh::B8.2-shape guard — deploy.sh no longer 'git reset --hard origin/main'"
+            echo "  rationale: deployed code MUST match committed HEAD on origin/main; a missing hard reset lets the box run divergent state."
+            exit 1
+          fi
+          echo "AI4 guard verified: scripts/deploy.sh force-checkouts (-fB) + git reset --hard origin/main."
 
       - name: Verify scripts/pull-deploy.sh has the B8.10.4 post-daemon-reload drift check
         # B8.10.4 — pins the post-daemon-reload drift check against silent

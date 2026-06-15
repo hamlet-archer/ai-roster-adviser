@@ -42,7 +42,19 @@ flock -n "$LOCK" bash -c '
   set -euo pipefail
   cd /opt/ai-roster-adviser
   git fetch origin main
-  git checkout -B main origin/main
+  # AI4: force-checkout (-fB, not -B). The npm prune --omit=dev step LATER in
+  # this script rewrites package-lock.json and leaves the working tree dirty,
+  # so the dirty lockfile this checkout must overcome is the one the PREVIOUS
+  # deploy left behind. A plain git checkout -B then ABORTS (local changes to
+  # package-lock.json would be overwritten) on any deploy whose origin/main
+  # lockfile differs from the box committed one -- i.e. on every dependency
+  # change -- silently wedging the deploy on stale code. -f discards the dirty
+  # lockfile so the checkout always advances. The reset --hard below also
+  # realigns the tree; -fB makes the checkout itself non-abortive.
+  # NOTE: keep this comment free of the apostrophe character -- it lives inside
+  # the single-quoted flock bash -c block, where a stray apostrophe closes the
+  # quote and breaks the whole script (bash -n catches it, 2026-06-15).
+  git checkout -fB main origin/main
   git reset --hard origin/main
   # Preserve .env (always); node_modules/dist rebuilt below.
   git clean -fd -e .env -e node_modules/ -e dist/
