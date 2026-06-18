@@ -71,6 +71,59 @@ describe('runSyncWithTrace', () => {
     }
   });
 
+  it('emits a sync.cycle_complete event on the success path (AJ2b)', async () => {
+    await runSyncWithTrace(() => Promise.resolve(report()));
+    await closeOpsDb();
+
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const ev = db
+        .prepare(
+          "SELECT kind, severity, payload_json FROM events WHERE agent_id = 'roster-adviser' AND kind = 'sync.cycle_complete'",
+        )
+        .get() as { kind: string; severity: string; payload_json: string } | undefined;
+      expect(ev).toBeDefined();
+      expect(ev?.severity).toBe('info');
+      const payload = JSON.parse(ev?.payload_json ?? '{}');
+      expect(payload.contract_id).toBe('sync.cycle_complete.v1');
+      expect(payload.sources_ok).toBe(1);
+      expect(payload.sources_failed).toBe(0);
+      expect(payload.rows_upserted).toBe(5);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('does NOT emit sync.cycle_complete on a non-ok cycle (AJ2b — failure path uses sync.failed)', async () => {
+    const failingReport = report({
+      status: 'sheet_error',
+      headerHashOk: false,
+      cellsUpserted: 0,
+      cellsSkipped: 0,
+      errorMessage: 'values.get returned 1 rows; need at least 2 header rows',
+    });
+    await runSyncWithTrace(() => Promise.resolve(failingReport));
+    await closeOpsDb();
+
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const complete = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM events WHERE agent_id = 'roster-adviser' AND kind = 'sync.cycle_complete'",
+        )
+        .get() as { n: number };
+      expect(complete.n).toBe(0);
+      const failed = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM events WHERE agent_id = 'roster-adviser' AND kind = 'sync.failed'",
+        )
+        .get() as { n: number };
+      expect(failed.n).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it('ends the run failed when the sync reports a non-ok status', async () => {
     const failingReport = report({
       status: 'sheet_error',
