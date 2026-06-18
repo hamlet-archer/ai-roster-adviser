@@ -107,6 +107,40 @@ export async function runSyncWithTrace(
     const report = await runSync();
     run.bumpItems(report.cellsUpserted);
     if (report.status === 'ok') {
+      // AJ2b: per-cycle success-path trace event so the dashboard /feed shows the
+      // sync OUTCOME (W&L sheet read OK, roster rows upserted), not just that the
+      // sync ran (the `runs` row from AI1b). Sister change to AJ2a in
+      // calendar-adviser; contract sync.cycle_complete.v1 in ai-ops-meta. roster
+      // reads one W&L sheet, so a non-`ok` status is a whole-cycle failure already
+      // traced by the `sync.failed` emit below — this success-path event fires only
+      // on `status === 'ok'`, mapping the single sheet onto sources_ok=1. Fail-soft:
+      // a failed emit never fails the sync (the sync oneshot IS the liveness signal,
+      // so observability wiring must degrade, not fail — same invariant as the
+      // open-failure catch above).
+      try {
+        await cp.emit({
+          run,
+          kind: 'sync.cycle_complete',
+          severity: 'info',
+          payload: {
+            contract_id: 'sync.cycle_complete.v1',
+            sources_ok: 1,
+            sources_failed: 0,
+            rows_upserted: report.cellsUpserted,
+            detail: `wl_sheet_ok=1 roster_rows_upserted=${report.cellsUpserted} cells_skipped=${report.cellsSkipped}`,
+          },
+        });
+      } catch (emitErr) {
+        console.error(
+          JSON.stringify({
+            level: 'warn',
+            service: 'ai-roster-adviser',
+            phase: 'ops-db',
+            msg: 'sync_cycle_complete_emit_failed',
+            error: emitErr instanceof Error ? emitErr.message : String(emitErr),
+          }),
+        );
+      }
       await run.end({
         status: 'done',
         summary: `cells_upserted=${report.cellsUpserted} cells_skipped=${report.cellsSkipped}`,
